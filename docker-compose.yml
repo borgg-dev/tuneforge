@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  miner:
+    build:
+      context: .
+      dockerfile: Dockerfile.miner
+    container_name: tuneforge-miner
+    env_file: .env.miner
+    volumes:
+      - ./storage:/app/storage
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+    ports:
+      - "8091:8091"
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  validator:
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    container_name: tuneforge-validator
+    env_file: .env.validator
+    volumes:
+      - ./storage:/app/storage
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+    ports:
+      - "8092:8092"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.miner
+    container_name: tuneforge-api
+    env_file: .env.miner
+    command: ["python", "-m", "uvicorn", "tuneforge.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./storage:/app/storage
+    ports:
+      - "8080:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
