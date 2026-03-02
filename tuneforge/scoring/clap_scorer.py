@@ -80,17 +80,20 @@ class CLAPScorer:
             )
             text_inputs = {k: v.to(device) for k, v in text_inputs.items() if isinstance(v, torch.Tensor)}
             with torch.no_grad():
-                text_embeds = self._model.get_text_features(**text_inputs)
+                text_out = self._model.get_text_features(**text_inputs)
+                # Handle both raw tensor and BaseModelOutputWithPooling
+                text_embeds = text_out if isinstance(text_out, torch.Tensor) else text_out.pooler_output
 
             # Get audio embeddings
             audio_inputs = self._processor(
-                audios=[audio_resampled],
+                audio=[audio_resampled],
                 sampling_rate=CLAP_SAMPLE_RATE,
                 return_tensors="pt",
             )
             audio_inputs = {k: v.to(device) for k, v in audio_inputs.items() if isinstance(v, torch.Tensor)}
             with torch.no_grad():
-                audio_embeds = self._model.get_audio_features(**audio_inputs)
+                audio_out = self._model.get_audio_features(**audio_inputs)
+                audio_embeds = audio_out if isinstance(audio_out, torch.Tensor) else audio_out.pooler_output
 
             # Cosine similarity → [0, 1]
             text_embeds = torch.nn.functional.normalize(text_embeds, dim=-1)
@@ -123,13 +126,14 @@ class CLAPScorer:
             device = next(self._model.parameters()).device
 
             audio_inputs = self._processor(
-                audios=[audio_resampled],
+                audio=[audio_resampled],
                 sampling_rate=CLAP_SAMPLE_RATE,
                 return_tensors="pt",
             )
             audio_inputs = {k: v.to(device) for k, v in audio_inputs.items() if isinstance(v, torch.Tensor)}
             with torch.no_grad():
-                embeds = self._model.get_audio_features(**audio_inputs)
+                audio_out = self._model.get_audio_features(**audio_inputs)
+                embeds = audio_out if isinstance(audio_out, torch.Tensor) else audio_out.pooler_output
 
             return embeds.cpu().numpy().flatten()
 

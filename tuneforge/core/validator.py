@@ -7,7 +7,9 @@ EMA leaderboard → on-chain weight setting.
 """
 
 import asyncio
+import base64
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -71,6 +73,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         logger.info(f"=== Validation round {self.current_round} ===")
 
+        # 0. Force metagraph resync to get fresh axon data
+        self.resync_metagraph()
+
         # 1. Generate challenge prompt
         challenge = self._prompt_generator.generate_challenge()
 
@@ -98,19 +103,40 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 validator_uid=self.uid or -1,
             )
 
-        logger.info(f"Querying {len(miner_uids)} miners")
+        logger.info(f"Querying {len(miner_uids)} miners: UIDs={miner_uids[:20]}{'...' if len(miner_uids) > 20 else ''}")
 
         # 4. Query miners via dendrite
         axons = [self.metagraph.axons[uid] for uid in miner_uids]
+        for uid in miner_uids[:5]:
+            ax = self.metagraph.axons[uid]
+            logger.debug(f"  UID {uid} axon: {ax.ip}:{ax.port} hotkey={ax.hotkey[:16]}...")
         try:
             responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
                 axons=axons,
                 synapse=synapse,
                 timeout=self.settings.generation_timeout,
+                deserialize=False,
             )
+            logger.info(f"Dendrite returned {len(responses)} responses")
         except Exception as exc:
             logger.error(f"Dendrite forward failed: {exc}")
             responses = []
+
+        # Log per-response status
+        for uid, resp in zip(miner_uids, responses):
+            if resp is None:
+                logger.debug(f"  UID {uid}: no response (None)")
+                continue
+            try:
+                status_code = resp.axon.status_code if resp.axon else '?'
+                status_msg = (resp.axon.status_message or '')[:80] if resp.axon else ''
+            except Exception:
+                status_code = '?'
+                status_msg = ''
+            if hasattr(resp, 'audio_b64') and resp.audio_b64 is not None:
+                logger.info(f"  UID {uid}: got audio ({len(resp.audio_b64)} chars b64) status={status_code}")
+            else:
+                logger.debug(f"  UID {uid}: no audio, status={status_code} msg={status_msg}")
 
         # Build response event
         event = DendriteResponseEvent(
@@ -145,6 +171,18 @@ class TuneForgeValidator(BaseValidatorNeuron):
         logger.info(
             f"Got {len(valid_responses)}/{len(miner_uids)} valid responses"
         )
+
+        # 4b. Save generated audio to storage/<uid>/<challenge_id>.wav
+        for uid, resp in zip(valid_uids, valid_responses):
+            try:
+                audio_bytes = base64.b64decode(resp.audio_b64)
+                uid_dir = Path(self.settings.storage_path) / str(uid)
+                uid_dir.mkdir(parents=True, exist_ok=True)
+                out_path = uid_dir / f"{challenge['challenge_id']}.wav"
+                out_path.write_bytes(audio_bytes)
+                logger.info(f"Saved UID {uid} audio to {out_path} ({len(audio_bytes)} bytes)")
+            except Exception as exc:
+                logger.warning(f"Failed to save audio for UID {uid}: {exc}")
 
         # 5. Score all responses
         if valid_responses:

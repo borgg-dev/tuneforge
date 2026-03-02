@@ -72,9 +72,12 @@ class BaseNeuron(ABC):
     # ------------------------------------------------------------------
 
     def _signal_handler(self, signum: int, frame: object) -> None:
-        """Handle SIGINT/SIGTERM by setting exit flag."""
+        """Handle SIGINT/SIGTERM. First press: graceful shutdown. Second: force exit."""
         sig_name = signal.Signals(signum).name
-        logger.warning(f"Received {sig_name} — requesting graceful shutdown")
+        if self.should_exit:
+            logger.warning(f"Received {sig_name} again — forcing exit")
+            raise SystemExit(1)
+        logger.warning(f"Received {sig_name} — requesting graceful shutdown (press again to force)")
         self.should_exit = True
         self.is_running = False
 
@@ -207,13 +210,12 @@ class BaseNeuron(ABC):
         return validators
 
     def get_miner_uids(self) -> list[int]:
-        """Get UIDs of all neurons except ourselves."""
+        """Get UIDs of all neurons excluding ourselves."""
         try:
-            return [
-                uid_idx
-                for uid_idx in range(len(self.metagraph.S))
-                if uid_idx != self.uid
-            ]
+            total = len(self.metagraph.S)
+            uids = [uid for uid in range(total) if uid != self.uid]
+            logger.debug(f"Metagraph: {total} total UIDs, querying {len(uids)}")
+            return uids
         except Exception as exc:
             logger.error(f"Error fetching miner UIDs: {exc}")
             return []

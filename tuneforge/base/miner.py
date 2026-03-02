@@ -10,6 +10,7 @@ Extends BaseNeuron with miner-specific functionality:
 
 import time
 from abc import abstractmethod
+from typing import Tuple
 
 import bittensor as bt
 from loguru import logger
@@ -57,31 +58,65 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
 
         Attaches handlers for generation, ping, and health synapses
         with appropriate blacklisting and priority functions.
+
+        Note: Bittensor's axon does exact signature matching on attached
+        functions. It expects plain functions with a single `synapse`
+        parameter (not bound methods with `self`). We wrap our methods
+        to satisfy this requirement.
         """
         if self.settings.axon_port:
             self.axon = bt.Axon(wallet=self.wallet, port=self.settings.axon_port)
         else:
             self.axon = bt.Axon(wallet=self.wallet)
 
+        # --- Build plain-function wrappers that match bittensor's expected signatures ---
+
+        def _fwd_generation(synapse: MusicGenerationSynapse) -> MusicGenerationSynapse:
+            return self.forward_generation(synapse)
+
+        def _bl_generation(synapse: MusicGenerationSynapse) -> Tuple[bool, str]:
+            return self.blacklist_generation(synapse)
+
+        def _pri_generation(synapse: MusicGenerationSynapse) -> float:
+            return self.priority_generation(synapse)
+
+        def _fwd_ping(synapse: PingSynapse) -> PingSynapse:
+            return self.forward_ping(synapse)
+
+        def _bl_ping(synapse: PingSynapse) -> Tuple[bool, str]:
+            return self._check_blacklist(synapse)
+
+        def _pri_ping(synapse: PingSynapse) -> float:
+            return self._priority_by_stake(synapse)
+
+        def _fwd_health(synapse: HealthReportSynapse) -> HealthReportSynapse:
+            return self.forward_health(synapse)
+
+        def _bl_health(synapse: HealthReportSynapse) -> Tuple[bool, str]:
+            return self._check_blacklist(synapse)
+
+        def _pri_health(synapse: HealthReportSynapse) -> float:
+            return self._priority_by_stake(synapse)
+
         # Music generation handler
         self.axon.attach(
-            forward_fn=self.forward_generation,
-            blacklist_fn=self.blacklist_generation,
-            priority_fn=self.priority_generation,
+            forward_fn=_fwd_generation,
+            blacklist_fn=_bl_generation,
+            priority_fn=_pri_generation,
         )
 
         # Ping / availability handler
         self.axon.attach(
-            forward_fn=self.forward_ping,
-            blacklist_fn=self._check_blacklist,
-            priority_fn=self._priority_by_stake,
+            forward_fn=_fwd_ping,
+            blacklist_fn=_bl_ping,
+            priority_fn=_pri_ping,
         )
 
         # Health report handler
         self.axon.attach(
-            forward_fn=self.forward_health,
-            blacklist_fn=self._check_blacklist,
-            priority_fn=self._priority_by_stake,
+            forward_fn=_fwd_health,
+            blacklist_fn=_bl_health,
+            priority_fn=_pri_health,
         )
 
         logger.info(f"Axon set up on port {self.axon.port}")
@@ -91,23 +126,20 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
     # Blacklisting
     # ------------------------------------------------------------------
 
-    async def _check_blacklist(
+    def _check_blacklist(
         self, synapse: bt.Synapse
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         """
-        Common blacklist logic — only allow registered validators.
+        Common blacklist logic — only allow registered neurons.
         """
         caller_hotkey = synapse.dendrite.hotkey
         if not caller_hotkey:
             return True, "No hotkey provided"
 
         try:
-            caller_uid = self.metagraph.hotkeys.index(caller_hotkey)
+            self.metagraph.hotkeys.index(caller_hotkey)
         except ValueError:
             return True, "Caller not registered"
-
-        if not self.metagraph.validator_permit[caller_uid]:
-            return True, "No validator permit"
 
         return False, "Allowed"
 
@@ -165,9 +197,9 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
         ...
 
     @abstractmethod
-    async def blacklist_generation(
+    def blacklist_generation(
         self, synapse: MusicGenerationSynapse
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         """Determine if a generation request should be blacklisted."""
         ...
 
@@ -212,7 +244,11 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
 
                     self.log_status()
                     self.step += 1
-                    time.sleep(60)
+                    # Sleep in short intervals so Ctrl+C is responsive
+                    for _ in range(60):
+                        if self.should_exit:
+                            break
+                        time.sleep(1)
 
                 except KeyboardInterrupt:
                     break
@@ -242,7 +278,10 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
                         f"Axon serve rate limited, retrying in {delay}s "
                         f"(attempt {attempt + 1}/{max_retries})"
                     )
-                    time.sleep(delay)
+                    for _ in range(delay):
+                        if self.should_exit:
+                            return
+                        time.sleep(1)
                 else:
                     raise
         logger.error(

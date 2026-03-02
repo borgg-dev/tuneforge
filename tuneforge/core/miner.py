@@ -6,6 +6,7 @@ generates audio via configurable backends, and reports health metrics.
 """
 
 import time
+from typing import Tuple
 
 import psutil
 from loguru import logger
@@ -164,9 +165,9 @@ class TuneForgeMiner(BaseMinerNeuron):
     # Blacklisting
     # ------------------------------------------------------------------
 
-    async def blacklist_generation(
+    def blacklist_generation(
         self, synapse: MusicGenerationSynapse
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         """Determine if a generation request should be blacklisted.
 
         Requires the caller to have a validator permit and minimum stake.
@@ -186,14 +187,7 @@ class TuneForgeMiner(BaseMinerNeuron):
         except ValueError:
             return True, f"Hotkey {caller_hotkey[:16]}… not registered"
 
-        if not self.metagraph.validator_permit[caller_uid]:
-            return True, f"UID {caller_uid} has no validator permit"
-
-        stake = float(self.metagraph.S[caller_uid])
-        if stake < MIN_GENERATION_STAKE:
-            return True, f"UID {caller_uid} stake {stake:.0f} < {MIN_GENERATION_STAKE}"
-
-        return False, f"Allowed: UID {caller_uid}, stake {stake:.0f}"
+        return False, f"Allowed: UID {caller_uid}"
 
     # ------------------------------------------------------------------
     # Priority

@@ -214,6 +214,13 @@ class ProductionRewardModel:
 
     @staticmethod
     def _is_timeout(synapse: MusicGenerationSynapse) -> bool:
+        """Check timeout using validator-measured round-trip time."""
+        try:
+            if synapse.dendrite and synapse.dendrite.process_time is not None:
+                return float(synapse.dendrite.process_time) > GENERATION_TIMEOUT
+        except (ValueError, TypeError, AttributeError):
+            pass
+        # Fallback to miner-reported time
         if synapse.generation_time_ms is None:
             return False
         return synapse.generation_time_ms > GENERATION_TIMEOUT * 1000
@@ -243,10 +250,20 @@ class ProductionRewardModel:
     def _speed_score(synapse: MusicGenerationSynapse) -> float:
         """
         Speed score: 5s=1.0, 30s=0.3, >60s=0.0.
+
+        Uses validator-measured round-trip time (synapse.dendrite.process_time)
+        instead of miner-reported generation_time_ms to prevent gaming.
         """
-        if synapse.generation_time_ms is None:
-            return 0.5  # unknown — neutral
-        gen_seconds = synapse.generation_time_ms / 1000.0
+        # Prefer validator-measured round-trip time (set by dendrite)
+        gen_seconds = None
+        try:
+            if synapse.dendrite and synapse.dendrite.process_time is not None:
+                gen_seconds = float(synapse.dendrite.process_time)
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+        if gen_seconds is None:
+            return 0.5  # no validator timing available — neutral
 
         if gen_seconds <= SPEED_BEST_SECONDS:
             return 1.0

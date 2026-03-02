@@ -1,11 +1,12 @@
 bittensor>=10.0.0
-torch>=2.1.0
-torchaudio>=2.1.0
-numpy>=1.24.0
+torch>=2.4.0
+torchaudio>=2.4.0
+numpy>=2.0.1
 scipy>=1.11.0
 transformers>=4.36.0
-audiocraft>=1.3.0
-accelerate>=0.25.0
+# audiocraft installed separately with --no-deps (hard-pins torch==2.1.0)
+# audiocraft>=1.3.0
+accelerate>=0.34.0
 librosa>=0.10.0
 soundfile>=0.12.0
 pydub>=0.25.0

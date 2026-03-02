@@ -217,36 +217,11 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
 
     def get_miner_subset(self) -> list[int]:
         """
-        Get the miner subset this validator should query.
+        Get the miners to query this round.
 
-        Uses time-synchronised seeding so all validators query
-        disjoint miner subsets that rotate every epoch.
+        Returns all available miner UIDs (non-validators) up to the subnet size.
         """
-        all_miner_uids = self.get_miner_uids()
-        if not all_miner_uids:
-            return []
-
-        validator_uids = self.get_validator_uids()
-        num_validators = len(validator_uids)
-        if num_validators == 0:
-            return all_miner_uids
-
-        seed = self.block // self.settings.neuron_epoch_length
-        rng = random.Random(seed)
-        shuffled = all_miner_uids.copy()
-        rng.shuffle(shuffled)
-
-        try:
-            my_index = validator_uids.index(self.uid)
-        except ValueError:
-            return []
-
-        miners_per_validator = len(shuffled) // num_validators
-        start_idx = my_index * miners_per_validator
-
-        if my_index == num_validators - 1:
-            return shuffled[start_idx:]
-        return shuffled[start_idx : start_idx + miners_per_validator]
+        return self.get_miner_uids()
 
     # ------------------------------------------------------------------
     # Scoring
@@ -293,6 +268,11 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         self.setup()
         self.is_running = True
 
+        # Single event loop for the lifetime of the validator — reused across rounds
+        # so the dendrite's aiohttp session stays valid.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         try:
             while self.is_running and not self.should_exit:
                 try:
@@ -300,14 +280,9 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                         self.sync()
 
                     # Run validation round
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        response_event = loop.run_until_complete(
-                            self.run_validation_round()
-                        )
-                    finally:
-                        loop.close()
+                    response_event = loop.run_until_complete(
+                        self.run_validation_round()
+                    )
 
                     # Process results
                     self.process_round_results(response_event)
@@ -328,6 +303,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                     logger.error(f"Error in validation loop: {exc}")
                     time.sleep(60)
         finally:
+            loop.close()
             self.shutdown()
 
     def process_round_results(self, response_event: DendriteResponseEvent) -> None:
@@ -344,7 +320,10 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         remaining = self.settings.validation_interval - elapsed
         if remaining > 0:
             logger.info(f"Waiting {remaining:.0f}s until next round…")
-            time.sleep(remaining)
+            # Sleep in short intervals so Ctrl+C / SIGTERM is responsive
+            end_time = time.time() + remaining
+            while time.time() < end_time and not self.should_exit:
+                time.sleep(1)
 
     def shutdown(self) -> None:
         """Shut down the validator cleanly."""
