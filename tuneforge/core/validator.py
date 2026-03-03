@@ -8,7 +8,9 @@ EMA leaderboard → on-chain weight setting.
 
 import asyncio
 import base64
+import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,6 @@ from tuneforge.rewards.leaderboard import MinerLeaderboard
 from tuneforge.rewards.reward import ProductionRewardModel
 from tuneforge.rewards.scoring import TaskScorer
 from tuneforge.rewards.weight_setter import WeightSetter
-from tuneforge.scoring.diversity import DiversityScorer
 from tuneforge.settings import Settings, get_settings
 from tuneforge.validation.challenge_manager import ChallengeManager
 from tuneforge.validation.prompt_generator import PromptGenerator
@@ -40,7 +41,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._task_scorer = TaskScorer(self.settings)
         self._prompt_generator = PromptGenerator()
         self._leaderboard = MinerLeaderboard()
-        self._diversity_scorer = DiversityScorer()
         self._challenge_manager = ChallengeManager()
         self._weight_setter: WeightSetter | None = None  # init after setup
 
@@ -172,13 +172,31 @@ class TuneForgeValidator(BaseValidatorNeuron):
             f"Got {len(valid_responses)}/{len(miner_uids)} valid responses"
         )
 
-        # 4b. Save generated audio to storage/<uid>/<challenge_id>.wav
+        # 4b. Save generated audio to storage/<challenge_id>/<uid>.wav
+        #     with one shared metadata.json per challenge
+        round_dir = Path(self.settings.storage_path) / challenge["challenge_id"]
+        round_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write challenge metadata once (shared across all miners)
+        meta_path = round_dir / "metadata.json"
+        if not meta_path.exists():
+            try:
+                meta_path.write_text(json.dumps({
+                    "challenge_id": challenge["challenge_id"],
+                    "prompt": challenge["prompt"],
+                    "genre": challenge["genre"],
+                    "mood": challenge["mood"],
+                    "tempo_bpm": challenge["tempo_bpm"],
+                    "duration_seconds": challenge["duration_seconds"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }, indent=2))
+            except Exception as exc:
+                logger.warning(f"Failed to save metadata: {exc}")
+
         for uid, resp in zip(valid_uids, valid_responses):
             try:
                 audio_bytes = base64.b64decode(resp.audio_b64)
-                uid_dir = Path(self.settings.storage_path) / str(uid)
-                uid_dir.mkdir(parents=True, exist_ok=True)
-                out_path = uid_dir / f"{challenge['challenge_id']}.wav"
+                out_path = round_dir / f"{uid}.wav"
                 out_path.write_bytes(audio_bytes)
                 logger.info(f"Saved UID {uid} audio to {out_path} ({len(audio_bytes)} bytes)")
             except Exception as exc:
@@ -195,15 +213,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
             # 6. Update leaderboard
             for uid, reward in zip(valid_uids, rewards):
                 self._leaderboard.update(uid, reward)
-
-            # 7. Compute diversity scores (already factored into score_batch,
-            #    but log them separately)
-            try:
-                diversity_scores = self._diversity_scorer.score_batch(valid_responses)
-                for uid, div_s in zip(valid_uids, diversity_scores):
-                    logger.debug(f"  UID {uid}: diversity={div_s:.3f}")
-            except Exception as exc:
-                logger.debug(f"Diversity scoring info: {exc}")
 
             # Update base scores array
             self.update_scores(valid_uids, rewards)

@@ -43,7 +43,7 @@ class TestPromptGenerator:
         pg = PromptGenerator(seed=42)
         for _ in range(50):
             c = pg.generate_challenge()
-            assert c["duration_seconds"] in [10.0, 15.0, 20.0, 30.0]
+            assert c["duration_seconds"] in [5.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
 
     def test_instruments_not_empty(self):
         pg = PromptGenerator(seed=42)

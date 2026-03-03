@@ -287,9 +287,11 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                     # Process results
                     self.process_round_results(response_event)
 
-                    # Set weights if due
-                    if self.should_set_weights():
-                        self.set_weights()
+                    # Weight setting is handled by WeightSetter in
+                    # TuneForgeValidator.run_validation_round() — the
+                    # duplicate BaseValidatorNeuron.set_weights() call
+                    # was removed because it overwrote the leaderboard's
+                    # steepened weights with flat EMA weights (NEW-01 fix).
 
                     self.log_status()
                     self.step += 1

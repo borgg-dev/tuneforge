@@ -127,6 +127,10 @@ class Settings(BaseSettings):
         default="laion/larger_clap_music",
         description="CLAP model for text-audio similarity"
     )
+    preference_model_path: Optional[str] = Field(
+        default=None,
+        description="Path to trained preference model checkpoint (.pt file)",
+    )
 
     # Weight setting
     weight_setter_step: int = Field(

@@ -56,7 +56,7 @@ class MinerLeaderboard:
             uid: Miner UID.
             raw_score: Latest round score in [0, 1].
         """
-        raw_score = float(np.clip(raw_score, 0.0, 1.0))
+        raw_score = float(np.clip(np.nan_to_num(raw_score, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0))
         count = self._rounds.get(uid, 0)
 
         if uid not in self._ema:

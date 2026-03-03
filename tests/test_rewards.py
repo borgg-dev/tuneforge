@@ -16,9 +16,9 @@ class TestScoringConfig:
         total = sum(SCORING_WEIGHTS.values())
         assert total == pytest.approx(1.0, abs=1e-6)
 
-    def test_all_weights_positive(self):
+    def test_all_weights_non_negative(self):
         for key, val in SCORING_WEIGHTS.items():
-            assert val > 0, f"{key} weight should be positive"
+            assert val >= 0, f"{key} weight should be non-negative"
 
 
 class TestRewardModelResponses:
@@ -45,20 +45,29 @@ class TestRewardModelResponses:
 
 
 class TestSpeedScoring:
+    """Speed scoring uses validator-measured dendrite.process_time (seconds)."""
+
+    @staticmethod
+    def _make_synapse_with_process_time(process_time):
+        """Create synapse with dendrite.process_time set."""
+        from bittensor.core.synapse import TerminalInfo
+        syn = MusicGenerationSynapse()
+        syn.dendrite = TerminalInfo(process_time=process_time)
+        return syn
 
     def test_fast_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = MusicGenerationSynapse(generation_time_ms=3000)
+        syn = self._make_synapse_with_process_time(3.0)
         assert PRM._speed_score(syn) == pytest.approx(1.0)
 
     def test_slow_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = MusicGenerationSynapse(generation_time_ms=65000)
+        syn = self._make_synapse_with_process_time(65.0)
         assert PRM._speed_score(syn) == pytest.approx(0.0)
 
     def test_mid_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = MusicGenerationSynapse(generation_time_ms=30000)
+        syn = self._make_synapse_with_process_time(30.0)
         score = PRM._speed_score(syn)
         assert 0.2 <= score <= 0.4
 
@@ -66,6 +75,61 @@ class TestSpeedScoring:
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
         syn = MusicGenerationSynapse(generation_time_ms=None)
         assert PRM._speed_score(syn) == pytest.approx(0.5)
+
+
+class TestLeaderboardSteepening:
+    """Tests for the steepening function and baseline behavior (FIND-005)."""
+
+    def test_below_baseline_is_zero(self):
+        lb = MinerLeaderboard()
+        # Manually set EMA below baseline
+        lb._ema[0] = 0.30
+        lb._rounds[0] = 20  # warmed up
+        assert lb.get_weight(0) == 0.0
+
+    def test_above_baseline_positive(self):
+        lb = MinerLeaderboard()
+        lb._ema[0] = 0.60
+        lb._rounds[0] = 20
+        w = lb.get_weight(0)
+        assert w > 0.0
+
+    def test_gradient_is_monotonic(self):
+        lb = MinerLeaderboard()
+        weights = []
+        for ema in [0.40, 0.50, 0.60, 0.70, 0.80, 0.90]:
+            lb._ema[0] = ema
+            lb._rounds[0] = 20
+            weights.append(lb.get_weight(0))
+        # Weights should be strictly non-decreasing
+        for i in range(1, len(weights)):
+            assert weights[i] >= weights[i - 1]
+
+    def test_quality_improvement_always_rewarded(self):
+        """A miner improving quality should always gain weight (FIND-002 regression)."""
+        from tuneforge.rewards.reward import ProductionRewardModel as PRM
+        from tuneforge.config.scoring_config import SCORING_WEIGHTS
+
+        # Miner A: high quality across all quality dimensions, slow speed
+        quality_weight = (SCORING_WEIGHTS["quality"]
+                          + SCORING_WEIGHTS["musicality"]
+                          + SCORING_WEIGHTS["production"]
+                          + SCORING_WEIGHTS.get("melody", 0)
+                          + SCORING_WEIGHTS.get("neural_quality", 0)
+                          + SCORING_WEIGHTS["preference"]
+                          + SCORING_WEIGHTS.get("structural", 0)
+                          + SCORING_WEIGHTS.get("vocal", 0))
+        comp_a = (SCORING_WEIGHTS["clap"] * 0.60
+                  + quality_weight * 0.80
+                  + SCORING_WEIGHTS["diversity"] * 0.50
+                  + SCORING_WEIGHTS["speed"] * 0.30)
+        # Miner B: low quality, fast speed
+        comp_b = (SCORING_WEIGHTS["clap"] * 0.60
+                  + quality_weight * 0.45
+                  + SCORING_WEIGHTS["diversity"] * 0.50
+                  + SCORING_WEIGHTS["speed"] * 1.00)
+        # Quality miner should outscore speed miner
+        assert comp_a > comp_b
 
 
 class TestDurationPenalty:

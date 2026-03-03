@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from loguru import logger
 
-from tuneforge.config.scoring_config import CLAP_MODEL, CLAP_SAMPLE_RATE
+from tuneforge.config.scoring_config import CLAP_MODEL, CLAP_SAMPLE_RATE, CLAP_SIM_FLOOR, CLAP_SIM_CEILING
 
 
 class CLAPScorer:
@@ -95,11 +95,16 @@ class CLAPScorer:
                 audio_out = self._model.get_audio_features(**audio_inputs)
                 audio_embeds = audio_out if isinstance(audio_out, torch.Tensor) else audio_out.pooler_output
 
-            # Cosine similarity → [0, 1]
+            # Cosine similarity → [0, 1] via calibrated range mapping
             text_embeds = torch.nn.functional.normalize(text_embeds, dim=-1)
             audio_embeds = torch.nn.functional.normalize(audio_embeds, dim=-1)
             cosine_sim = (text_embeds * audio_embeds).sum(dim=-1).item()
-            score = float(np.clip((cosine_sim + 1.0) / 2.0, 0.0, 1.0))
+            # Remap from empirical CLAP range [floor, ceiling] to [0, 1]
+            denom = CLAP_SIM_CEILING - CLAP_SIM_FLOOR
+            if denom <= 0:
+                score = float(np.clip((cosine_sim + 1.0) / 2.0, 0.0, 1.0))
+            else:
+                score = float(np.clip((cosine_sim - CLAP_SIM_FLOOR) / denom, 0.0, 1.0))
 
             logger.debug(f"CLAP score: {score:.4f} (cosine={cosine_sim:.4f})")
             return score

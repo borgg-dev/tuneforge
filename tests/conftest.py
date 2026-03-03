@@ -78,8 +78,9 @@ def sample_audio_complex() -> np.ndarray:
         + 0.1 * np.sin(2 * np.pi * 1320 * t)
         + 0.05 * np.sin(2 * np.pi * 1760 * t)
     )
-    # Add slow amplitude modulation (tremolo)
-    modulation = 0.5 + 0.5 * np.sin(2 * np.pi * 2 * t)
+    # Add slow amplitude modulation (tremolo) — depth doesn't reach zero
+    # to keep dynamic range realistic (similar to mastered music)
+    modulation = 0.7 + 0.3 * np.sin(2 * np.pi * 2 * t)
     audio *= modulation
     return audio.astype(np.float32)
 
