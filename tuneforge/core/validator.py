@@ -226,8 +226,12 @@ class TuneForgeValidator(BaseValidatorNeuron):
                     f"ema={ema:.4f}, weight={weight:.4f}"
                 )
 
-        # 8. Clear round caches
-        # (plagiarism detector caches are cleared in score_batch)
+        # 8. Save leaderboard snapshot for the organic query router
+        try:
+            snapshot_path = str(Path(self.settings.storage_path) / "leaderboard.json")
+            self._leaderboard.save_snapshot(snapshot_path)
+        except Exception as exc:
+            logger.warning(f"Failed to save leaderboard snapshot: {exc}")
 
         # 9. Set weights via weight setter
         if self._weight_setter is not None:
@@ -243,7 +247,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         logger.info(
             f"Round {self.current_round} complete: "
             f"{len(valid_responses)} scored, "
-            f"leaderboard: {lb_summary.get('warmed_up', 0)} warmed up, "
+            f"leaderboard: {lb_summary.get('above_baseline', 0)} above baseline, "
             f"duration={event.round_end_time - event.round_start_time:.1f}s"
         )
 

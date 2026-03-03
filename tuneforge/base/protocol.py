@@ -72,6 +72,10 @@ class MusicGenerationSynapse(bt.Synapse):
         default="",
         description="Unique challenge ID for this validation round",
     )
+    is_organic: bool = Field(
+        default=False,
+        description="Whether this is an organic (product/API) query vs a validator challenge",
+    )
 
     # --- Response fields (miner → validator) ---
 

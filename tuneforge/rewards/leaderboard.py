@@ -6,14 +6,11 @@ Applies a steepening function so only consistently good miners
 receive significant weight.
 """
 
-import math
-
 import numpy as np
 from loguru import logger
 
 from tuneforge.config.scoring_config import (
     EMA_ALPHA,
-    EMA_WARMUP,
     STEEPEN_BASELINE,
     STEEPEN_POWER,
 )
@@ -38,13 +35,12 @@ class MinerLeaderboard:
         self._alpha = alpha
         self._baseline = steepen_baseline
         self._power = steepen_power
-        self._warmup_rounds = math.ceil(2.0 / alpha - 1.0)
 
         self._ema: dict[int, float] = {}
         self._rounds: dict[int, int] = {}
 
         logger.info(
-            f"Leaderboard: alpha={alpha}, warmup={self._warmup_rounds}, "
+            f"Leaderboard: alpha={alpha}, "
             f"baseline={steepen_baseline}, power={steepen_power}"
         )
 
@@ -70,21 +66,14 @@ class MinerLeaderboard:
         """
         Get steepened weight for a miner.
 
-        Returns 0.0 for miners that haven't warmed up or whose
-        EMA is below the baseline.
+        Returns 0.0 if the miner's EMA is below the baseline.
         """
-        if not self.is_warmed_up(uid):
-            return 0.0
         ema = self._ema.get(uid, 0.0)
         return self._steepen(ema)
 
     def get_ema(self, uid: int) -> float:
         """Get raw EMA score for a miner."""
         return self._ema.get(uid, 0.0)
-
-    def is_warmed_up(self, uid: int) -> bool:
-        """Check if miner has enough rounds for a stable EMA."""
-        return self._rounds.get(uid, 0) >= self._warmup_rounds
 
     def get_all_weights(self) -> dict[int, float]:
         """Get steepened weights for all tracked miners."""
@@ -106,17 +95,61 @@ class MinerLeaderboard:
         normalised = (ema - self._baseline) / (1.0 - self._baseline)
         return float(normalised ** self._power)
 
+    def snapshot(self) -> dict:
+        """Return a serialisable snapshot of the leaderboard state.
+
+        Used to share EMA scores with the organic query router
+        (which runs in a separate API server process).
+        """
+        entries = {}
+        for uid in self._ema:
+            entries[str(uid)] = {
+                "ema": round(self._ema[uid], 6),
+                "weight": round(self.get_weight(uid), 6),
+                "rounds": self._rounds.get(uid, 0),
+            }
+        return {
+            "baseline": self._baseline,
+            "miners": entries,
+        }
+
+    def save_snapshot(self, path: str) -> None:
+        """Write leaderboard snapshot to a JSON file.
+
+        The organic query router reads this file to pick miners
+        based on challenge-derived EMA quality scores.
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+
+        data = self.snapshot()
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # Atomic write via temp file + rename
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=str(dest.parent), suffix=".tmp", delete=False
+            ) as tmp:
+                json.dump(data, tmp, indent=2)
+                tmp_path = tmp.name
+            Path(tmp_path).rename(dest)
+            logger.debug("Leaderboard snapshot saved to {}", path)
+        except Exception as exc:
+            logger.warning("Failed to save leaderboard snapshot: {}", exc)
+
     def summary(self) -> dict:
         """Produce leaderboard summary for logging."""
         if not self._ema:
-            return {"total_miners": 0, "warmed_up": 0}
+            return {"total_miners": 0, "above_baseline": 0}
 
-        warmed = sum(1 for uid in self._ema if self.is_warmed_up(uid))
+        above = sum(1 for uid in self._ema if self.get_weight(uid) > 0)
         emas = list(self._ema.values())
         weights = [self.get_weight(uid) for uid in self._ema]
         return {
             "total_miners": len(self._ema),
-            "warmed_up": warmed,
+            "above_baseline": above,
             "ema_mean": float(np.mean(emas)),
             "ema_max": float(np.max(emas)),
             "weight_mean": float(np.mean(weights)) if weights else 0.0,

@@ -1,7 +1,7 @@
 """
 Track browsing endpoints for the TuneForge API.
 
-GET /api/v1/tracks    — paginated search with filters
+GET /api/v1/tracks    — paginated search with filters (user-scoped when authenticated)
 GET /api/v1/tracks/{track_id} — single track detail
 """
 
@@ -10,8 +10,9 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tuneforge.api.auth import get_api_key
+from tuneforge.api.auth import get_current_user, require_user
 from tuneforge.api.database import row_to_scores, total_pages
+from tuneforge.api.database.models import UserRow
 from tuneforge.api.models import BrowseResponse, TrackMetadata
 
 router = APIRouter(prefix="/api/v1", tags=["browse"])
@@ -25,16 +26,22 @@ async def browse_tracks(
     max_tempo: int | None = Query(default=None, ge=20, le=300, description="Maximum tempo BPM"),
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
-    api_key: str = Depends(get_api_key),
+    user: UserRow | None = Depends(get_current_user),
 ) -> BrowseResponse:
-    """Browse generated tracks with optional filters."""
+    """Browse generated tracks with optional filters.
+
+    When authenticated, returns only the user's own tracks.
+    """
+    from tuneforge.api.database import search_tracks
     from tuneforge.api.server import app_state
 
-    rows, total = await app_state.db.search_tracks(
+    rows, total = await search_tracks(
+        app_state.db,
         genre=genre,
         mood=mood,
         min_tempo=min_tempo,
         max_tempo=max_tempo,
+        user_id=user.id if user else None,
         page=page,
         page_size=page_size,
     )
@@ -66,7 +73,7 @@ async def browse_tracks(
 @router.get("/tracks/{track_id}", response_model=TrackMetadata)
 async def get_track(
     track_id: str,
-    api_key: str = Depends(get_api_key),
+    user: UserRow | None = Depends(get_current_user),
 ) -> TrackMetadata:
     """Get details for a single track."""
     from tuneforge.api.server import app_state
@@ -90,3 +97,20 @@ async def get_track(
         miner_hotkey=row.miner_hotkey,
         created_at=row.created_at,
     )
+
+
+@router.delete("/tracks/{track_id}", status_code=204)
+async def delete_track(
+    track_id: str,
+    user: UserRow = Depends(require_user),
+) -> None:
+    """Delete a track owned by the authenticated user."""
+    from tuneforge.api.database.crud import delete_track as crud_delete_track
+    from tuneforge.api.server import app_state
+
+    deleted = await crud_delete_track(app_state.db, track_id, user.id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Track not found or not owned by you.",
+        )

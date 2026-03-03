@@ -1,13 +1,13 @@
 """
 Pydantic models for the TuneForge API.
 
-Defines request/response schemas for music generation, browsing,
-and health endpoints.
+Defines request/response schemas for auth, credits, music generation,
+browsing, and health endpoints.
 """
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class GenerateRequest(BaseModel):
@@ -88,3 +88,145 @@ class HealthResponse(BaseModel):
     block_height: int
     connected_miners: int
     uptime_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# Auth models
+# ---------------------------------------------------------------------------
+
+
+class RegisterRequest(BaseModel):
+    """Registration request."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=100)
+
+
+class LoginRequest(BaseModel):
+    """Login request."""
+
+    email: EmailStr
+    password: str
+
+
+class UserProfile(BaseModel):
+    """Public user profile."""
+
+    id: str
+    email: str
+    display_name: str | None
+    avatar_url: str | None
+    plan_tier: str
+    created_at: datetime
+
+
+class AuthResponse(BaseModel):
+    """Response containing tokens and user profile."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int  # seconds
+    user: UserProfile
+
+
+class TokenResponse(BaseModel):
+    """Refreshed token response."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class UpdateProfileRequest(BaseModel):
+    """Profile update request."""
+
+    display_name: str | None = Field(default=None, max_length=100)
+    avatar_url: str | None = Field(default=None, max_length=2000)
+
+
+class RefreshRequest(BaseModel):
+    """Token refresh request body (alternative to cookie)."""
+
+    refresh_token: str
+
+
+# ---------------------------------------------------------------------------
+# Credit models
+# ---------------------------------------------------------------------------
+
+
+class CreditBalance(BaseModel):
+    """Current credit balance."""
+
+    daily_balance: int
+    daily_allowance: int
+    next_reset: datetime
+
+
+class CreditTransaction(BaseModel):
+    """Single credit transaction."""
+
+    id: str
+    amount: int
+    tx_type: str
+    reference_id: str | None
+    description: str | None
+    created_at: datetime
+
+
+class CreditHistoryResponse(BaseModel):
+    """Paginated credit transaction history."""
+
+    transactions: list[CreditTransaction]
+    total: int
+    page: int
+    pages: int
+
+
+# ---------------------------------------------------------------------------
+# Generation status models
+# ---------------------------------------------------------------------------
+
+
+class GenerationStatusResponse(BaseModel):
+    """Generation status for polling."""
+
+    request_id: str
+    status: str
+    tracks: list[TrackInfo] = Field(default_factory=list)
+    created_at: datetime
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# API Key models
+# ---------------------------------------------------------------------------
+
+
+class CreateApiKeyRequest(BaseModel):
+    """Request to create a new API key."""
+
+    name: str = Field(default="Default", max_length=100)
+
+
+class ApiKeyInfo(BaseModel):
+    """API key info (without the full key)."""
+
+    id: str
+    name: str
+    key_prefix: str
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class ApiKeyCreated(BaseModel):
+    """Response when a new API key is created (shows full key once)."""
+
+    id: str
+    name: str
+    key: str  # Full key — only shown once
+    key_prefix: str
+    created_at: datetime

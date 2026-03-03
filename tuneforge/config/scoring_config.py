@@ -69,7 +69,7 @@ QUALITY_WEIGHTS: dict[str, float] = {
 # EMA / Leaderboard
 # ---------------------------------------------------------------------------
 EMA_ALPHA: float = _env_float("TF_EMA_ALPHA", 0.2)
-EMA_WARMUP: int = 9  # ceil(2 / EMA_ALPHA - 1)
+EMA_WARMUP: int = _env_int("TF_EMA_WARMUP", 9)  # kept for reference; no longer used as a gate
 STEEPEN_BASELINE: float = _env_float("TF_STEEPEN_BASELINE", 0.35)
 STEEPEN_POWER: float = _env_float("TF_STEEPEN_POWER", 2.0)
 

@@ -162,9 +162,9 @@ class PromptParser:
 
         structured_prompt = " ".join(parts)
 
-        # Combine with free-text if both exist
+        # Combine: user's text leads, structured params enhance
         if text and structured_prompt:
-            return f"{structured_prompt}, {text.strip()}"
+            return f"{text.strip()}, {structured_prompt}"
         elif structured_prompt:
             return structured_prompt
         elif text:

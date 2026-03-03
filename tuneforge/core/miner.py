@@ -82,11 +82,9 @@ class TuneForgeMiner(BaseMinerNeuron):
     def forward_generation(
         self, synapse: MusicGenerationSynapse
     ) -> MusicGenerationSynapse:
-        """Generate music from a validator's challenge synapse.
+        """Generate music from either a validator challenge or an organic API query.
 
-        Builds an enhanced prompt from structured fields, generates audio
-        via the model manager, post-processes the output, and encodes it
-        to base64 for transmission back to the validator.
+        Dispatches to the appropriate handler based on synapse.is_organic.
 
         Args:
             synapse: Incoming generation request with prompt and parameters.
@@ -94,10 +92,22 @@ class TuneForgeMiner(BaseMinerNeuron):
         Returns:
             Synapse populated with generated audio and metadata.
         """
+        if synapse.is_organic:
+            return self._handle_organic(synapse)
+        return self._handle_challenge(synapse)
+
+    def _handle_challenge(
+        self, synapse: MusicGenerationSynapse
+    ) -> MusicGenerationSynapse:
+        """Handle a validator challenge request (reward mechanism).
+
+        The validator sends structured parameters to test the miner's
+        generation quality. Scored for weights.
+        """
         t0 = time.time()
 
         try:
-            # Build enhanced prompt from structured fields
+            # For challenges, structured params lead (validator controls the test)
             enhanced_prompt = self._prompt_parser.build_prompt(
                 text=synapse.prompt,
                 genre=synapse.genre,
@@ -108,62 +118,119 @@ class TuneForgeMiner(BaseMinerNeuron):
                 time_sig=synapse.time_signature,
             )
             logger.info(
-                f"Challenge {synapse.challenge_id}: "
+                f"[CHALLENGE] {synapse.challenge_id}: "
                 f"prompt='{enhanced_prompt[:100]}', "
                 f"duration={synapse.duration_seconds}s"
             )
 
-            # Clamp duration to configured maximum
-            duration = min(
-                synapse.duration_seconds,
-                float(self.settings.generation_max_duration),
+            audio, sr, wav_bytes, elapsed_ms = self._generate_audio(
+                enhanced_prompt, synapse, t0
             )
 
-            # Generate audio
-            audio, sr = self._model_manager.generate(
-                prompt=enhanced_prompt,
-                duration=duration,
-                seed=synapse.seed,
-                guidance_scale=self.settings.guidance_scale,
-                temperature=self.settings.temperature,
-                top_k=self.settings.top_k,
-                top_p=self.settings.top_p,
-            )
-
-            # Post-process: normalize, limit, fade
-            audio = self._audio_utils.normalize(audio)
-            audio = self._audio_utils.apply_limiter(audio, threshold=0.95)
-            audio = self._audio_utils.fade_edges(audio, sr, fade_ms=50)
-
-            # Encode to base64 WAV
-            wav_bytes = self._audio_utils.to_wav_bytes(audio, sr)
-            audio_b64 = self._audio_utils.to_base64(wav_bytes)
-
-            # Fill response fields
-            elapsed_ms = int((time.time() - t0) * 1000)
-            synapse.audio_b64 = audio_b64
+            synapse.audio_b64 = self._audio_utils.to_base64(wav_bytes)
             synapse.sample_rate = sr
             synapse.generation_time_ms = elapsed_ms
             synapse.model_id = self._model_manager.active_model_id
 
             self._generations_completed += 1
             self._generation_times.append(elapsed_ms)
-            # Keep only last 100 times for rolling average
             if len(self._generation_times) > 100:
                 self._generation_times = self._generation_times[-100:]
 
             logger.info(
-                f"Challenge {synapse.challenge_id} complete: "
+                f"[CHALLENGE] {synapse.challenge_id} complete: "
                 f"{elapsed_ms}ms, {len(wav_bytes)} bytes"
             )
 
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
-            logger.error(f"Generation failed for challenge {synapse.challenge_id}: {exc}")
+            logger.error(f"[CHALLENGE] Failed {synapse.challenge_id}: {exc}")
             synapse.generation_time_ms = elapsed_ms
             self._record_error()
 
         return synapse
+
+    def _handle_organic(
+        self, synapse: MusicGenerationSynapse
+    ) -> MusicGenerationSynapse:
+        """Handle an organic (product/API) request from a paying customer.
+
+        The user's free-text prompt is the primary input. Structured
+        parameters (genre, mood, etc.) only supplement it.
+        This path does NOT affect validator scoring or weight setting.
+        """
+        t0 = time.time()
+
+        try:
+            # For organic: user's prompt leads, structured params supplement
+            enhanced_prompt = self._prompt_parser.build_prompt(
+                text=synapse.prompt,
+                genre=synapse.genre,
+                mood=synapse.mood,
+                tempo=synapse.tempo_bpm,
+                instruments=synapse.instruments,
+                key=synapse.key_signature,
+                time_sig=synapse.time_signature,
+            )
+            logger.info(
+                f"[ORGANIC] {synapse.challenge_id}: "
+                f"prompt='{enhanced_prompt[:100]}', "
+                f"duration={synapse.duration_seconds}s"
+            )
+
+            audio, sr, wav_bytes, elapsed_ms = self._generate_audio(
+                enhanced_prompt, synapse, t0
+            )
+
+            synapse.audio_b64 = self._audio_utils.to_base64(wav_bytes)
+            synapse.sample_rate = sr
+            synapse.generation_time_ms = elapsed_ms
+            synapse.model_id = self._model_manager.active_model_id
+
+            logger.info(
+                f"[ORGANIC] {synapse.challenge_id} complete: "
+                f"{elapsed_ms}ms, {len(wav_bytes)} bytes"
+            )
+
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            logger.error(f"[ORGANIC] Failed {synapse.challenge_id}: {exc}")
+            synapse.generation_time_ms = elapsed_ms
+            self._record_error()
+
+        return synapse
+
+    def _generate_audio(
+        self, prompt: str, synapse: MusicGenerationSynapse, t0: float
+    ) -> Tuple:
+        """Shared audio generation logic for both challenge and organic paths.
+
+        Returns:
+            Tuple of (audio_array, sample_rate, wav_bytes, elapsed_ms).
+        """
+        duration = min(
+            synapse.duration_seconds,
+            float(self.settings.generation_max_duration),
+        )
+
+        audio, sr = self._model_manager.generate(
+            prompt=prompt,
+            duration=duration,
+            seed=synapse.seed,
+            guidance_scale=self.settings.guidance_scale,
+            temperature=self.settings.temperature,
+            top_k=self.settings.top_k,
+            top_p=self.settings.top_p,
+        )
+
+        audio = self._audio_utils.normalize(audio)
+        audio = self._audio_utils.apply_limiter(audio, threshold=0.95)
+        audio = self._audio_utils.fade_edges(audio, sr, fade_ms=50)
+
+        wav_bytes = self._audio_utils.to_wav_bytes(audio, sr)
+        elapsed_ms = int((time.time() - t0) * 1000)
+
+        return audio, sr, wav_bytes, elapsed_ms
 
     # ------------------------------------------------------------------
     # Blacklisting
@@ -198,22 +265,26 @@ class TuneForgeMiner(BaseMinerNeuron):
     # ------------------------------------------------------------------
 
     def priority_generation(self, synapse: MusicGenerationSynapse) -> float:
-        """Determine request priority based on validator stake.
+        """Determine request priority.
 
-        Higher-staked validators get higher priority in the request queue.
+        Organic (product) requests get a large priority boost over
+        validator challenges so paying customers are served first.
 
         Args:
             synapse: Incoming generation request.
 
         Returns:
-            Priority value (validator's stake).
+            Priority value.
         """
+        # Organic queries from the product API get top priority
+        organic_boost = 1_000_000.0 if synapse.is_organic else 0.0
+
         caller_hotkey = synapse.dendrite.hotkey
         if not caller_hotkey:
-            return 0.0
+            return organic_boost
         try:
             caller_uid = self.metagraph.hotkeys.index(caller_hotkey)
-            return float(self.metagraph.S[caller_uid])
+            return organic_boost + float(self.metagraph.S[caller_uid])
         except (ValueError, IndexError):
             return 0.0
 

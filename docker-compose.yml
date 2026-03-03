@@ -41,11 +41,14 @@ services:
       dockerfile: Dockerfile.miner
     container_name: tuneforge-api
     env_file: .env.miner
-    command: ["python", "-m", "uvicorn", "tuneforge.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["python", "-m", "uvicorn", "tuneforge.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
     volumes:
       - ./storage:/app/storage
     ports:
       - "8080:8000"
+    depends_on:
+      - postgres
+      - redis
     deploy:
       resources:
         reservations:
@@ -54,3 +57,27 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tuneforge-postgres
+    environment:
+      POSTGRES_DB: tuneforge
+      POSTGRES_USER: tuneforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tuneforge_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tuneforge-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

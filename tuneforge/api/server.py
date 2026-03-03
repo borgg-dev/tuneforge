@@ -1,11 +1,11 @@
 """
 FastAPI application for the TuneForge marketplace API.
 
-Provides REST endpoints for music generation, track browsing, and
-network health monitoring.  Designed to run alongside (or inside)
-a TuneForge validator process.
+Provides REST endpoints for music generation, track browsing,
+user auth, credits, and network health monitoring.
 """
 
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -20,7 +20,11 @@ from loguru import logger
 from tuneforge import VERSION
 from tuneforge.api import rate_limiter
 from tuneforge.api.billing import UsageTracker
+from tuneforge.api.credits import CreditService
 from tuneforge.api.database import Database
+from tuneforge.api.organic_router import OrganicQueryRouter
+from tuneforge.api.redis_manager import RedisManager
+from tuneforge.api.sse import SSEManager
 from tuneforge.api.storage import StorageBackend, get_storage_backend
 from tuneforge.settings import Settings, get_settings
 from tuneforge.utils.logging import setup_logging
@@ -40,6 +44,11 @@ class AppState:
     storage: StorageBackend | None = None
     db: Database | None = None
     billing: UsageTracker = field(default_factory=UsageTracker)
+    # SaaS additions
+    redis: RedisManager | None = None
+    organic_router: OrganicQueryRouter | None = None
+    credit_service: CreditService | None = None
+    sse_manager: SSEManager | None = None
 
 
 app_state = AppState()
@@ -84,6 +93,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app_state.db = Database(url=s.db_url)
     await app_state.db.init_db()
 
+    # Redis
+    try:
+        rm = RedisManager(url=s.redis_url)
+        await rm.ping()
+        app_state.redis = rm
+        app_state.sse_manager = SSEManager(app_state.redis)
+        logger.info("Redis connected")
+    except Exception as exc:
+        logger.warning("Could not connect to Redis: {} — SSE and Redis rate-limiting unavailable", exc)
+        app_state.redis = None
+
+    # Credit service
+    if app_state.db is not None:
+        app_state.credit_service = CreditService(app_state.db)
+
+    # Organic query router
+    if app_state.dendrite is not None and app_state.metagraph is not None:
+        app_state.organic_router = OrganicQueryRouter(
+            dendrite=app_state.dendrite,
+            metagraph=app_state.metagraph,
+            settings=s,
+        )
+        logger.info("Organic query router initialized")
+
     # Rate limiter
     rate_limiter.configure(max_requests=s.api_rate_limit, window_seconds=60)
 
@@ -100,6 +133,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # --- Shutdown ---
     logger.info("Shutting down TuneForge API…")
+    if app_state.redis:
+        await app_state.redis.close()
     if app_state.db:
         await app_state.db.close()
     logger.info("Shutdown complete")
@@ -116,14 +151,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins in dev; restrict in production via env
+# CORS — configurable origins
+_allowed_origins = [
+    get_settings().frontend_url,
+    "http://localhost:3000",
+    "http://192.168.1.83:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Attach a unique request ID to every request/response."""
+    req_id = request.headers.get("X-Request-ID", uuid.uuid4().hex)
+    request.state.request_id = req_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +205,18 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
 # Register routers
 # ---------------------------------------------------------------------------
 
-from tuneforge.api.routes.generate import router as generate_router  # noqa: E402
+from tuneforge.api.routes.auth import router as auth_router  # noqa: E402
 from tuneforge.api.routes.browse import router as browse_router  # noqa: E402
+from tuneforge.api.routes.credits import router as credits_router  # noqa: E402
+from tuneforge.api.routes.generate import router as generate_router  # noqa: E402
 from tuneforge.api.routes.health import router as health_router  # noqa: E402
+from tuneforge.api.routes.keys import router as keys_router  # noqa: E402
 
+app.include_router(auth_router)
 app.include_router(generate_router)
 app.include_router(browse_router)
+app.include_router(credits_router)
+app.include_router(keys_router)
 app.include_router(health_router)
 
 

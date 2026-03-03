@@ -177,7 +177,47 @@ class Settings(BaseSettings):
     # Database configuration
     db_url: str = Field(
         default="sqlite+aiosqlite:///./tuneforge.db",
-        description="Database URL"
+        description="Database URL (asyncpg for PostgreSQL, aiosqlite for SQLite)"
+    )
+
+    # Redis configuration
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL"
+    )
+
+    # JWT authentication
+    jwt_secret: str = Field(
+        default="CHANGE_ME_IN_PRODUCTION",
+        description="Secret key for JWT token signing"
+    )
+    jwt_access_expire_minutes: int = Field(
+        default=15,
+        description="Access token expiry in minutes"
+    )
+    jwt_refresh_expire_days: int = Field(
+        default=7,
+        description="Refresh token expiry in days"
+    )
+
+    # Google OAuth
+    google_client_id: Optional[str] = Field(
+        default=None,
+        description="Google OAuth client ID"
+    )
+    google_client_secret: Optional[str] = Field(
+        default=None,
+        description="Google OAuth client secret"
+    )
+    google_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/google/callback",
+        description="Google OAuth redirect URI"
+    )
+
+    # Frontend URL (for CORS and redirects)
+    frontend_url: str = Field(
+        default="http://localhost:3000",
+        description="Frontend application URL"
     )
 
     # Logging
