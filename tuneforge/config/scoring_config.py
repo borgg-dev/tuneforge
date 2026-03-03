@@ -90,7 +90,7 @@ DURATION_TOLERANCE_MAX: float = _env_float("TF_DURATION_TOLERANCE_MAX", 0.50)
 # ---------------------------------------------------------------------------
 GENERATION_TIMEOUT: int = _env_int("TF_GENERATION_TIMEOUT", 120)
 VALIDATION_INTERVAL: int = _env_int("TF_VALIDATION_INTERVAL", 300)
-WEIGHT_UPDATE_INTERVAL: int = _env_int("TF_WEIGHT_UPDATE_INTERVAL", 175)
+WEIGHT_UPDATE_INTERVAL: int = _env_int("TF_WEIGHT_UPDATE_INTERVAL", 115)
 METAGRAPH_SYNC_INTERVAL: int = _env_int("TF_METAGRAPH_SYNC_INTERVAL", 1200)
 
 # ---------------------------------------------------------------------------
