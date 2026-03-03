@@ -89,6 +89,22 @@ class Settings(BaseSettings):
         default="float16",
         description="Model inference precision"
     )
+    guidance_scale: float = Field(
+        default=3.0,
+        description="Classifier-free guidance scale for generation"
+    )
+    temperature: float = Field(
+        default=1.0,
+        description="Sampling temperature for generation"
+    )
+    top_k: int = Field(
+        default=250,
+        description="Top-K sampling parameter (0 = disabled)"
+    )
+    top_p: float = Field(
+        default=0.0,
+        description="Nucleus sampling parameter (0 = disabled)"
+    )
 
     # Validation configuration
     validation_interval: int = Field(

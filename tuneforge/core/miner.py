@@ -124,6 +124,10 @@ class TuneForgeMiner(BaseMinerNeuron):
                 prompt=enhanced_prompt,
                 duration=duration,
                 seed=synapse.seed,
+                guidance_scale=self.settings.guidance_scale,
+                temperature=self.settings.temperature,
+                top_k=self.settings.top_k,
+                top_p=self.settings.top_p,
             )
 
             # Post-process: normalize, limit, fade
