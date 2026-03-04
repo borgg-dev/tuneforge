@@ -30,6 +30,25 @@ from tuneforge.validation.challenge_manager import ChallengeManager
 from tuneforge.validation.prompt_generator import PromptGenerator
 
 
+class HotkeyAuth(httpx.Auth):
+    """httpx Auth flow that signs each request with a Bittensor hotkey."""
+
+    def __init__(self, keypair: Any) -> None:
+        self.keypair = keypair
+
+    def auth_flow(self, request: httpx.Request):  # type: ignore[override]
+        nonce = str(time.time_ns())
+        body_hash = hashlib.sha256(request.content).hexdigest() if request.content else "empty"
+        # Use decoded path WITHOUT query string — must match server's request.url.path
+        path = request.url.path
+        message = f"{nonce}.{self.keypair.ss58_address}.{request.method}.{path}.{body_hash}"
+        signature = "0x" + self.keypair.sign(message).hex()
+        request.headers["X-Validator-Hotkey"] = self.keypair.ss58_address
+        request.headers["X-Validator-Nonce"] = nonce
+        request.headers["X-Validator-Signature"] = signature
+        yield request
+
+
 class TuneForgeValidator(BaseValidatorNeuron):
     """Full-featured TuneForge subnet validator."""
 
@@ -67,15 +86,31 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._api_client: httpx.AsyncClient | None = None
         api_url = self.settings.validator_api_url.rstrip("/")
         api_token = self.settings.validator_api_token
-        if api_url and api_token:
+
+        # Prefer hotkey signing (production), fall back to Bearer token (dev)
+        hotkey_available = False
+        try:
+            _ = self.wallet.hotkey.ss58_address
+            hotkey_available = True
+        except Exception:
+            pass
+
+        if api_url and hotkey_available:
+            self._api_client = httpx.AsyncClient(
+                base_url=api_url,
+                auth=HotkeyAuth(self.wallet.hotkey),
+                timeout=httpx.Timeout(60.0, connect=10.0),
+            )
+            logger.info(f"Validator API client configured with hotkey auth: {api_url}")
+        elif api_url and api_token:
             self._api_client = httpx.AsyncClient(
                 base_url=api_url,
                 headers={"Authorization": f"Bearer {api_token}"},
                 timeout=httpx.Timeout(60.0, connect=10.0),
             )
-            logger.info(f"Validator API client configured: {api_url}")
+            logger.info(f"Validator API client configured with Bearer token: {api_url}")
         else:
-            logger.warning("No validator API URL/token — audio saved to filesystem only")
+            logger.warning("No validator API URL/credentials — audio saved to filesystem only")
         logger.info("TuneForgeValidator setup complete")
 
     # ------------------------------------------------------------------

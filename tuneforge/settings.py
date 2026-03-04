@@ -213,6 +213,10 @@ class Settings(BaseSettings):
         default="",
         description="Service token the API server accepts from validators",
     )
+    validator_nonce_tolerance_ns: int = Field(
+        default=300_000_000_000,
+        description="Nonce tolerance window in nanoseconds (default 5 minutes)",
+    )
 
     # Google OAuth
     google_client_id: Optional[str] = Field(
@@ -248,7 +252,7 @@ class Settings(BaseSettings):
     _subtensor: Optional["bt.Subtensor"] = None
     _metagraph: Optional["bt.Metagraph"] = None
     _metagraph_last_sync: float = 0
-    _metagraph_sync_interval: int = 1200  # 20 minutes
+    _metagraph_sync_interval: int = 300  # 5 minutes
 
     @cached_property
     def wallet(self) -> "bt.Wallet":

@@ -12,7 +12,7 @@ import base64
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tuneforge.api.validator_auth import require_validator_token
+from tuneforge.api.validator_auth import require_validator_auth
 from tuneforge.api.models import (
     SubmitValidationRoundRequest,
     SubmitValidationRoundResponse,
@@ -27,13 +27,14 @@ from tuneforge.api.models import (
 router = APIRouter(
     prefix="/api/v1/validator",
     tags=["validator"],
-    dependencies=[Depends(require_validator_token)],
+    dependencies=[Depends(require_validator_auth)],
 )
 
 
 @router.post("/rounds", response_model=SubmitValidationRoundResponse, status_code=201)
 async def submit_validation_round(
     body: SubmitValidationRoundRequest,
+    authenticated_hotkey: str = Depends(require_validator_auth),
 ) -> SubmitValidationRoundResponse:
     """Submit a complete validation round with miner audio responses."""
     from tuneforge.api.database.crud import (
@@ -47,6 +48,9 @@ async def submit_validation_round(
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    # Use the cryptographically verified hotkey, not the self-reported one
+    verified_hotkey = authenticated_hotkey if authenticated_hotkey != "bearer-token" else (body.validator_hotkey or None)
+
     # Create the validation round
     vr = await create_validation_round(
         db,
@@ -56,7 +60,7 @@ async def submit_validation_round(
         mood=body.mood,
         tempo_bpm=body.tempo_bpm,
         duration_seconds=body.duration_seconds,
-        validator_hotkey=body.validator_hotkey or None,
+        validator_hotkey=verified_hotkey,
     )
 
     audio_entries: list[ValidationAudioInfo] = []
@@ -92,7 +96,7 @@ async def submit_validation_round(
 
     logger.info(
         "Validator {} submitted round {} ({} entries)",
-        body.validator_hotkey[:16] if body.validator_hotkey else "unknown",
+        verified_hotkey[:16] if verified_hotkey else "unknown",
         vr.id,
         len(audio_entries),
     )
@@ -119,14 +123,33 @@ async def submit_validation_round(
 async def update_round_scores(
     round_id: str,
     body: UpdateScoresRequest,
+    authenticated_hotkey: str = Depends(require_validator_auth),
 ) -> UpdateScoresResponse:
     """Update miner scores for a completed validation round."""
     from tuneforge.api.database.crud import update_validation_audio_scores
+    from tuneforge.api.database.models import ValidationRoundRow
     from tuneforge.api.server import app_state
 
     db = app_state.db
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
+
+    # Ownership check: only the validator who submitted the round can update scores
+    async with db.session() as session:
+        vr = await session.get(ValidationRoundRow, round_id)
+
+    if vr is None:
+        raise HTTPException(status_code=404, detail="Validation round not found")
+
+    if authenticated_hotkey != "bearer-token" and vr.validator_hotkey and vr.validator_hotkey != authenticated_hotkey:
+        logger.warning(
+            "Validator {} attempted to score round {} owned by {}",
+            authenticated_hotkey[:16], round_id, vr.validator_hotkey[:16],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot update scores for another validator's round.",
+        )
 
     scores_tuples = [(s.miner_uid, s.score) for s in body.scores]
     updated = await update_validation_audio_scores(db, round_id, scores_tuples)
@@ -134,7 +157,7 @@ async def update_round_scores(
     if updated == 0:
         raise HTTPException(status_code=404, detail="Round or scores not found")
 
-    logger.info("Updated {} scores for round {}", updated, round_id)
+    logger.info("Validator {} updated {} scores for round {}", authenticated_hotkey[:16], updated, round_id)
     return UpdateScoresResponse(updated=updated)
 
 
