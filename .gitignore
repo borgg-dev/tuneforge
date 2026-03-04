@@ -29,3 +29,4 @@ models/
 Thumbs.db
 annotations.jsonl
 embeddings.npz
+.github/
