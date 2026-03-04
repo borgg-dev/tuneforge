@@ -36,6 +36,7 @@ def _user_to_profile(user: UserRow) -> UserProfile:
         display_name=user.display_name,
         avatar_url=user.avatar_url,
         plan_tier=user.plan_tier,
+        is_admin=user.is_admin,
         created_at=user.created_at,
     )
 

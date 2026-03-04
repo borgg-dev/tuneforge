@@ -161,9 +161,9 @@ class Settings(BaseSettings):
     api_rate_limit: int = Field(default=10, description="Requests per minute per client")
 
     # Storage configuration
-    storage_backend: Literal["local", "s3"] = Field(
+    storage_backend: Literal["local", "s3", "postgres"] = Field(
         default="local",
-        description="Storage backend for generated audio"
+        description="Storage backend for generated audio (local, s3, or postgres)"
     )
     storage_path: str = Field(
         default="./storage",
@@ -176,8 +176,8 @@ class Settings(BaseSettings):
 
     # Database configuration
     db_url: str = Field(
-        default="sqlite+aiosqlite:///./tuneforge.db",
-        description="Database URL (asyncpg for PostgreSQL, aiosqlite for SQLite)"
+        default="postgresql+asyncpg://tuneforge:tuneforge_dev@localhost:5432/tuneforge",
+        description="PostgreSQL database URL (asyncpg)"
     )
 
     # Redis configuration
@@ -198,6 +198,20 @@ class Settings(BaseSettings):
     jwt_refresh_expire_days: int = Field(
         default=7,
         description="Refresh token expiry in days"
+    )
+
+    # Validator ↔ API integration
+    validator_api_url: str = Field(
+        default="http://localhost:8000",
+        description="Platform API base URL (used by validators to push data)",
+    )
+    validator_api_token: str = Field(
+        default="",
+        description="Service token validators send to authenticate with the API",
+    )
+    validator_service_token: str = Field(
+        default="",
+        description="Service token the API server accepts from validators",
     )
 
     # Google OAuth

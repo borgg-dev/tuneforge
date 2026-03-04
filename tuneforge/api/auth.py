@@ -155,6 +155,18 @@ async def require_user(
     return user
 
 
+async def require_admin(
+    user: "UserRow" = Depends(require_user),
+) -> "UserRow":
+    """Dependency that requires an admin user. Raises 403 if not admin."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user
+
+
 # Legacy compatibility — kept for existing routes that use get_api_key
 async def get_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),

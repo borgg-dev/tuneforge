@@ -1,8 +1,7 @@
 """
 Async database engine and session management for TuneForge.
 
-Supports both PostgreSQL (asyncpg) and SQLite (aiosqlite) backends,
-auto-detected from the database URL.
+Uses PostgreSQL (asyncpg) as the database backend.
 """
 
 import math
@@ -18,21 +17,11 @@ from tuneforge.api.database.models import Base
 class Database:
     """Async database wrapper providing sessions and lifecycle management."""
 
-    def __init__(self, url: str = "sqlite+aiosqlite:///./tuneforge.db") -> None:
+    def __init__(self, url: str = "postgresql+asyncpg://tuneforge:tuneforge_dev@localhost:5432/tuneforge") -> None:
         self._url = url
-        is_postgres = url.startswith("postgresql")
-
-        engine_kwargs: dict = {"echo": False}
-        if is_postgres:
-            engine_kwargs.update(pool_size=10, max_overflow=20)
-
+        engine_kwargs: dict = {"echo": False, "pool_size": 10, "max_overflow": 20}
         self._engine = create_async_engine(url, **engine_kwargs)
         self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
-        self._is_postgres = is_postgres
-
-    @property
-    def is_postgres(self) -> bool:
-        return self._is_postgres
 
     async def init_db(self, create_tables: bool = True) -> None:
         """Initialise the database.
@@ -42,7 +31,7 @@ class Database:
         if create_tables:
             async with self._engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database initialized ({})", "postgresql" if self._is_postgres else "sqlite")
+        logger.info("Database initialized (postgresql)")
 
     async def close(self) -> None:
         """Dispose of the engine connection pool."""

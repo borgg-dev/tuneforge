@@ -8,6 +8,7 @@ build/
 .eggs/
 *.egg
 .env
+.env.*
 .venv/
 venv/
 env/
@@ -26,3 +27,5 @@ models/
 *.safetensors
 .DS_Store
 Thumbs.db
+annotations.jsonl
+embeddings.npz

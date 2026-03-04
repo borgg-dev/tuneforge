@@ -6,14 +6,15 @@ challenge generation → miner querying → multi-signal scoring →
 EMA leaderboard → on-chain weight setting.
 """
 
-import asyncio
 import base64
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import numpy as np
 from loguru import logger
 
@@ -43,6 +44,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._leaderboard = MinerLeaderboard()
         self._challenge_manager = ChallengeManager()
         self._weight_setter: WeightSetter | None = None  # init after setup
+        self._last_model_check: float = 0.0
+        self._current_model_sha: str = ""
 
         logger.info("TuneForgeValidator initialised")
 
@@ -51,7 +54,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
     # ------------------------------------------------------------------
 
     def setup(self) -> None:
-        """Set up validator with weight setter."""
+        """Set up validator with weight setter and API client."""
         super().setup()
         self._weight_setter = WeightSetter(
             subtensor=self.subtensor,
@@ -60,6 +63,19 @@ class TuneForgeValidator(BaseValidatorNeuron):
             metagraph=self.metagraph,
             update_interval=self.settings.weight_setter_step,
         )
+        # HTTP client for platform API (replaces direct DB access)
+        self._api_client: httpx.AsyncClient | None = None
+        api_url = self.settings.validator_api_url.rstrip("/")
+        api_token = self.settings.validator_api_token
+        if api_url and api_token:
+            self._api_client = httpx.AsyncClient(
+                base_url=api_url,
+                headers={"Authorization": f"Bearer {api_token}"},
+                timeout=httpx.Timeout(60.0, connect=10.0),
+            )
+            logger.info(f"Validator API client configured: {api_url}")
+        else:
+            logger.warning("No validator API URL/token — audio saved to filesystem only")
         logger.info("TuneForgeValidator setup complete")
 
     # ------------------------------------------------------------------
@@ -172,35 +188,71 @@ class TuneForgeValidator(BaseValidatorNeuron):
             f"Got {len(valid_responses)}/{len(miner_uids)} valid responses"
         )
 
-        # 4b. Save generated audio to storage/<challenge_id>/<uid>.wav
-        #     with one shared metadata.json per challenge
-        round_dir = Path(self.settings.storage_path) / challenge["challenge_id"]
-        round_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write challenge metadata once (shared across all miners)
-        meta_path = round_dir / "metadata.json"
-        if not meta_path.exists():
+        # 4b. Push validation round to platform API (or filesystem fallback)
+        api_round_id: str | None = None
+        if self._api_client is not None and valid_responses:
             try:
-                meta_path.write_text(json.dumps({
+                validator_hotkey = ""
+                try:
+                    validator_hotkey = self.wallet.hotkey.ss58_address
+                except Exception:
+                    pass
+                payload = {
                     "challenge_id": challenge["challenge_id"],
                     "prompt": challenge["prompt"],
                     "genre": challenge["genre"],
                     "mood": challenge["mood"],
                     "tempo_bpm": challenge["tempo_bpm"],
                     "duration_seconds": challenge["duration_seconds"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }, indent=2))
+                    "validator_hotkey": validator_hotkey,
+                    "responses": [
+                        {
+                            "miner_uid": uid,
+                            "miner_hotkey": hotkey,
+                            "audio_b64": resp.audio_b64,
+                            "generation_time_ms": resp.generation_time_ms,
+                        }
+                        for uid, hotkey, resp in zip(valid_uids, valid_hotkeys, valid_responses)
+                    ],
+                }
+                api_resp = await self._api_client.post("/api/v1/validator/rounds", json=payload)
+                api_resp.raise_for_status()
+                result = api_resp.json()
+                api_round_id = result["round_id"]
+                logger.info(
+                    f"Submitted round {api_round_id} to API "
+                    f"({len(valid_responses)} audio entries)"
+                )
             except Exception as exc:
-                logger.warning(f"Failed to save metadata: {exc}")
+                logger.error(f"Failed to submit validation round to API: {exc}")
+        elif valid_responses:
+            # Filesystem fallback when no API configured
+            round_dir = Path(self.settings.storage_path) / challenge["challenge_id"]
+            round_dir.mkdir(parents=True, exist_ok=True)
 
-        for uid, resp in zip(valid_uids, valid_responses):
-            try:
-                audio_bytes = base64.b64decode(resp.audio_b64)
-                out_path = round_dir / f"{uid}.wav"
-                out_path.write_bytes(audio_bytes)
-                logger.info(f"Saved UID {uid} audio to {out_path} ({len(audio_bytes)} bytes)")
-            except Exception as exc:
-                logger.warning(f"Failed to save audio for UID {uid}: {exc}")
+            meta_path = round_dir / "metadata.json"
+            if not meta_path.exists():
+                try:
+                    meta_path.write_text(json.dumps({
+                        "challenge_id": challenge["challenge_id"],
+                        "prompt": challenge["prompt"],
+                        "genre": challenge["genre"],
+                        "mood": challenge["mood"],
+                        "tempo_bpm": challenge["tempo_bpm"],
+                        "duration_seconds": challenge["duration_seconds"],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, indent=2))
+                except Exception as exc:
+                    logger.warning(f"Failed to save metadata: {exc}")
+
+            for uid, resp in zip(valid_uids, valid_responses):
+                try:
+                    audio_bytes = base64.b64decode(resp.audio_b64)
+                    out_path = round_dir / f"{uid}.wav"
+                    out_path.write_bytes(audio_bytes)
+                    logger.info(f"Saved UID {uid} audio to {out_path} ({len(audio_bytes)} bytes)")
+                except Exception as exc:
+                    logger.warning(f"Failed to save audio for UID {uid}: {exc}")
 
         # 5. Score all responses
         if valid_responses:
@@ -216,6 +268,24 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
             # Update base scores array
             self.update_scores(valid_uids, rewards)
+
+            # 6b. Push scores to platform API
+            if self._api_client is not None and api_round_id is not None:
+                try:
+                    score_payload = {
+                        "scores": [
+                            {"miner_uid": uid, "score": float(reward)}
+                            for uid, reward in zip(valid_uids, rewards)
+                        ]
+                    }
+                    score_resp = await self._api_client.post(
+                        f"/api/v1/validator/rounds/{api_round_id}/scores",
+                        json=score_payload,
+                    )
+                    score_resp.raise_for_status()
+                    logger.info(f"Submitted {len(rewards)} scores for round {api_round_id}")
+                except Exception as exc:
+                    logger.error(f"Failed to submit scores to API: {exc}")
 
             # Log round results
             for uid, reward in zip(valid_uids, rewards):
@@ -241,7 +311,10 @@ class TuneForgeValidator(BaseValidatorNeuron):
             except Exception as exc:
                 logger.error(f"Weight setting failed: {exc}")
 
-        # 10. Log summary
+        # 10. Check for preference model update
+        await self._maybe_update_preference_model()
+
+        # 11. Log summary
         event.round_end_time = time.time()
         lb_summary = self._leaderboard.summary()
         logger.info(
@@ -252,6 +325,56 @@ class TuneForgeValidator(BaseValidatorNeuron):
         )
 
         return event
+
+    # ------------------------------------------------------------------
+    # Preference model auto-update
+    # ------------------------------------------------------------------
+
+    async def _maybe_update_preference_model(self) -> None:
+        """Check for and download a newer preference model from the API.
+
+        Checks at most once per hour (3600s).
+        """
+        if self._api_client is None:
+            return
+
+        now = time.time()
+        if now - self._last_model_check < 3600:
+            return
+        self._last_model_check = now
+
+        try:
+            resp = await self._api_client.get("/api/v1/annotations/model/latest")
+            if resp.status_code == 404:
+                return  # No model available yet
+            resp.raise_for_status()
+
+            remote_sha = resp.headers.get("x-model-sha256", "")
+            remote_version = resp.headers.get("x-model-version", "?")
+
+            if remote_sha and remote_sha == self._current_model_sha:
+                logger.debug(f"Preference model v{remote_version} is current")
+                return
+
+            # Download and write
+            model_path = Path(self.settings.preference_model_path or "preference_head.pt")
+            model_data = resp.content
+            local_sha = hashlib.sha256(model_data).hexdigest()
+
+            if local_sha != remote_sha:
+                logger.warning(
+                    f"Preference model checksum mismatch: expected {remote_sha[:12]}, got {local_sha[:12]}"
+                )
+                return
+
+            model_path.write_bytes(model_data)
+            self._current_model_sha = remote_sha
+            logger.info(
+                f"Updated preference model to v{remote_version} "
+                f"(sha256={remote_sha[:12]}..., {len(model_data)} bytes)"
+            )
+        except Exception as exc:
+            logger.debug(f"Preference model check failed: {exc}")
 
     # ------------------------------------------------------------------
     # Overrides

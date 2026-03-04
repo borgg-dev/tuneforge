@@ -7,12 +7,12 @@ Usage
     python tools/annotate_preferences.py storage/
     python tools/annotate_preferences.py storage/ -o annotations.jsonl --max-pairs 200
     python tools/annotate_preferences.py storage/ --no-same-challenge --player "mpv --no-video"
+    python tools/annotate_preferences.py --source db --db-url postgresql+asyncpg://...
 
-The tool scans a storage directory tree for WAV files organized as
-``storage/<challenge_id>/<uid>.wav`` with a shared ``metadata.json`` per
-challenge folder, generates pairwise A/B comparisons within each challenge
-group (or across all files if ``--no-same-challenge`` is passed), and
-presents them to the annotator for preference labeling.
+The tool scans a storage directory tree (or PostgreSQL database with
+``--source db``) for WAV files organized as pairwise A/B comparisons within
+each challenge group (or across all files if ``--no-same-challenge`` is
+passed), and presents them to the annotator for preference labeling.
 
 Results are appended to a JSONL file one record at a time for crash safety.
 Existing annotations are loaded on startup so the session can be resumed
@@ -22,6 +22,7 @@ at any time.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import itertools
 import json
@@ -29,6 +30,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -143,6 +145,89 @@ def scan_storage(storage_dir: str, same_challenge: bool = True) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Database scanning (--source db)
+# ---------------------------------------------------------------------------
+
+def scan_db(db_url: str, same_challenge: bool = True, tmp_dir: str | None = None) -> list[dict]:
+    """
+    Scan PostgreSQL for validation audio pairs and extract WAV files to a
+    temp directory for playback during annotation.
+
+    Returns pairs in the same format as scan_storage().
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+    async def _scan() -> list[dict]:
+        from tuneforge.api.database.engine import Database
+        from tuneforge.api.database.models import AudioBlobRow, ValidationAudioRow, ValidationRoundRow
+        from sqlalchemy import select
+
+        db = Database(url=db_url)
+        await db.init_db(create_tables=False)
+
+        # Fetch all rounds with their audio
+        async with db.session() as session:
+            rounds = (await session.execute(
+                select(ValidationRoundRow).order_by(ValidationRoundRow.created_at)
+            )).scalars().all()
+
+        out_dir = Path(tmp_dir) if tmp_dir else Path(tempfile.mkdtemp(prefix="tuneforge_annot_"))
+        print(f"Extracting audio to: {out_dir}")
+
+        pairs: list[dict] = []
+        all_files: list[str] = []
+
+        for vr in rounds:
+            async with db.session() as session:
+                audios = (await session.execute(
+                    select(ValidationAudioRow).where(ValidationAudioRow.round_id == vr.id)
+                )).scalars().all()
+
+            if len(audios) < 2 and same_challenge:
+                continue
+
+            # Extract WAV files for this round
+            round_files: list[tuple[str, ValidationAudioRow]] = []
+            for va in audios:
+                wav_path = out_dir / vr.challenge_id / f"{va.miner_uid}.wav"
+                if not wav_path.exists():
+                    async with db.session() as session:
+                        blob = await session.get(AudioBlobRow, va.audio_blob_id)
+                    if blob is None:
+                        continue
+                    wav_path.parent.mkdir(parents=True, exist_ok=True)
+                    wav_path.write_bytes(blob.audio_data)
+                round_files.append((str(wav_path), va))
+                all_files.append(str(wav_path))
+
+            if same_challenge and len(round_files) >= 2:
+                for (path_a, va_a), (path_b, va_b) in itertools.combinations(sorted(round_files), 2):
+                    pairs.append({
+                        "audio_a": path_a,
+                        "audio_b": path_b,
+                        "challenge_id": vr.challenge_id,
+                        "prompt": vr.prompt or "",
+                        "genre": vr.genre or "",
+                    })
+
+        if not same_challenge and len(all_files) >= 2:
+            # Cross-challenge pairing not supported for DB source yet
+            pass
+
+        await db.close()
+
+        # Deterministic shuffle
+        if all_files:
+            seed_material = "|".join(sorted(all_files))
+            seed = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest(), 16) % (2**32)
+            random.Random(seed).shuffle(pairs)
+
+        return pairs
+
+    return asyncio.run(_scan())
+
+
+# ---------------------------------------------------------------------------
 # Resume support
 # ---------------------------------------------------------------------------
 
@@ -233,12 +318,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "A/B preference annotation of audio files from TuneForge "
-            "validator storage."
+            "validator storage (local filesystem or PostgreSQL)."
         ),
     )
     parser.add_argument(
         "storage_dir",
-        help="Path to storage directory (e.g. storage/).",
+        nargs="?",
+        default="./storage",
+        help="Path to storage directory (default: ./storage). Ignored when --source db.",
+    )
+    parser.add_argument(
+        "--source",
+        choices=["local", "db"],
+        default="local",
+        help="Audio source: 'local' for filesystem, 'db' for PostgreSQL (default: local).",
+    )
+    parser.add_argument(
+        "--db-url",
+        default="postgresql+asyncpg://tuneforge:tuneforge_dev@localhost:5432/tuneforge",
+        help="PostgreSQL database URL (used with --source db).",
     )
     parser.add_argument(
         "--output", "-o",
@@ -280,12 +378,6 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = parse_args(argv)
 
-    # Validate storage directory
-    storage_dir = Path(args.storage_dir)
-    if not storage_dir.is_dir():
-        print(f"Error: {args.storage_dir} is not a directory.", file=sys.stderr)
-        return 1
-
     # Locate audio player early so we fail fast
     try:
         player = _find_player(args.player)
@@ -295,11 +387,20 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Audio player: {' '.join(player)}")
 
-    # Scan storage and build pair list
-    pairs = scan_storage(str(storage_dir), same_challenge=args.same_challenge)
+    # Scan pairs from either local filesystem or database
+    if args.source == "db":
+        print(f"Loading pairs from database: {args.db_url[:40]}...")
+        pairs = scan_db(args.db_url, same_challenge=args.same_challenge)
+    else:
+        storage_dir = Path(args.storage_dir)
+        if not storage_dir.is_dir():
+            print(f"Error: {args.storage_dir} is not a directory.", file=sys.stderr)
+            return 1
+        pairs = scan_storage(str(storage_dir), same_challenge=args.same_challenge)
+
     if not pairs:
-        print("No annotation pairs found. Need at least 2 WAV files "
-              "sharing a challenge_id in the storage directory.")
+        print("No annotation pairs found. Need at least 2 audio files "
+              "sharing a challenge_id.")
         return 0
 
     # Load previously completed annotations for resume support

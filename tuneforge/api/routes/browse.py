@@ -105,8 +105,16 @@ async def delete_track(
     user: UserRow = Depends(require_user),
 ) -> None:
     """Delete a track owned by the authenticated user."""
-    from tuneforge.api.database.crud import delete_track as crud_delete_track
+    from tuneforge.api.database.crud import delete_track as crud_delete_track, get_track
     from tuneforge.api.server import app_state
+
+    # Get track first to find audio blob
+    track = await get_track(app_state.db, track_id)
+    if track is None or track.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Track not found or not owned by you.",
+        )
 
     deleted = await crud_delete_track(app_state.db, track_id, user.id)
     if not deleted:
@@ -114,3 +122,10 @@ async def delete_track(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Track not found or not owned by you.",
         )
+
+    # Clean up audio blob
+    if track.audio_blob_id and app_state.storage:
+        try:
+            await app_state.storage.delete(track.audio_blob_id)
+        except Exception:
+            pass  # Blob cleanup is best-effort

@@ -79,7 +79,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Could not connect to Bittensor network: {} — running in offline mode", exc)
 
-    # Storage backend
+    # Database
+    app_state.db = Database(url=s.db_url)
+    await app_state.db.init_db()
+
+    # Storage backend (after db init for postgres backend)
     app_state.storage = get_storage_backend(
         backend=s.storage_backend,
         storage_path=s.storage_path,
@@ -87,11 +91,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         s3_region=s.s3_region,
         s3_access_key=s.s3_access_key,
         s3_secret_key=s.s3_secret_key,
+        db=app_state.db,
     )
-
-    # Database
-    app_state.db = Database(url=s.db_url)
-    await app_state.db.init_db()
 
     # Redis
     try:
@@ -155,6 +156,7 @@ app = FastAPI(
 _allowed_origins = [
     get_settings().frontend_url,
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://192.168.1.83:3000",
 ]
 app.add_middleware(
@@ -205,19 +207,25 @@ async def generic_error_handler(request: Request, exc: Exception) -> JSONRespons
 # Register routers
 # ---------------------------------------------------------------------------
 
+from tuneforge.api.routes.audio import router as audio_router  # noqa: E402
 from tuneforge.api.routes.auth import router as auth_router  # noqa: E402
 from tuneforge.api.routes.browse import router as browse_router  # noqa: E402
 from tuneforge.api.routes.credits import router as credits_router  # noqa: E402
 from tuneforge.api.routes.generate import router as generate_router  # noqa: E402
 from tuneforge.api.routes.health import router as health_router  # noqa: E402
 from tuneforge.api.routes.keys import router as keys_router  # noqa: E402
+from tuneforge.api.routes.validator import router as validator_router  # noqa: E402
+from tuneforge.api.routes.annotations import router as annotations_router  # noqa: E402
 
+app.include_router(audio_router)
 app.include_router(auth_router)
 app.include_router(generate_router)
 app.include_router(browse_router)
 app.include_router(credits_router)
 app.include_router(keys_router)
 app.include_router(health_router)
+app.include_router(validator_router)
+app.include_router(annotations_router)
 
 
 # ---------------------------------------------------------------------------
