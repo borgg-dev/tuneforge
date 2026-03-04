@@ -15,8 +15,10 @@ Design principles:
 """
 
 import asyncio
+import copy
 import io
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -312,11 +314,32 @@ class OrganicQueryRouter:
     # Single-miner query
     # ------------------------------------------------------------------
 
+    def _resolve_axon(self, uid: int):
+        """Return the axon for *uid*, rewriting to 127.0.0.1 when the miner
+        is co-located with this API server (avoids hairpin-NAT issues).
+
+        Set ``TF_LOCAL_MINER_IPS`` (comma-separated) to list external IPs
+        that should be rewritten.  If unset, no rewriting happens.
+        """
+        axon = self._metagraph.axons[uid]
+        local_ips = os.environ.get("TF_LOCAL_MINER_IPS", "")
+        if not local_ips:
+            return axon
+        rewrite_set = {ip.strip() for ip in local_ips.split(",") if ip.strip()}
+        if axon.ip in rewrite_set:
+            axon = copy.deepcopy(axon)
+            logger.debug(
+                "[ORGANIC] Rewriting axon IP for UID {} from {} → 127.0.0.1",
+                uid, axon.ip,
+            )
+            axon.ip = "127.0.0.1"
+        return axon
+
     async def _query_miner(
         self, uid: int, synapse, timeout: float
     ) -> tuple[bytes | None, dict]:
         """Send the generation request to a single miner and validate."""
-        axon = self._metagraph.axons[uid]
+        axon = self._resolve_axon(uid)
 
         # Track in-flight
         async with self._lock:
@@ -377,6 +400,7 @@ class OrganicQueryRouter:
         Checks: non-empty, non-silent, reasonable duration, no extreme clipping.
         """
         if len(audio_bytes) < 1024:
+            logger.warning("[QUALITY] Too small: {} bytes", len(audio_bytes))
             return False
 
         try:
@@ -390,6 +414,7 @@ class OrganicQueryRouter:
             # Non-silent
             rms = float(np.sqrt(np.mean(data**2)))
             if rms < 0.001:
+                logger.warning("[QUALITY] Silent audio: rms={:.6f}", rms)
                 return False
 
             # Duration check (within 50% of expected)
@@ -398,15 +423,25 @@ class OrganicQueryRouter:
                 actual_duration < expected_duration * 0.5
                 or actual_duration > expected_duration * 1.5
             ):
+                logger.warning(
+                    "[QUALITY] Duration mismatch: actual={:.1f}s expected={:.1f}s",
+                    actual_duration, expected_duration,
+                )
                 return False
 
             # Clipping check
             peak = float(np.max(np.abs(data)))
             if peak > 0.99:
+                logger.warning("[QUALITY] Clipping detected: peak={:.4f}", peak)
                 return False
 
+            logger.debug(
+                "[QUALITY] Passed: duration={:.1f}s rms={:.4f} peak={:.4f}",
+                actual_duration, rms, peak,
+            )
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning("[QUALITY] Failed to analyze audio: {}", exc)
             return False
 
     # ------------------------------------------------------------------

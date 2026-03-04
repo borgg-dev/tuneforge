@@ -93,7 +93,8 @@ async def _verify_hotkey_signature(request: Request) -> str:
         )
 
     # Check metagraph registration
-    metagraph = getattr(request.app.state, "metagraph", None)
+    from tuneforge.api.server import app_state
+    metagraph = app_state.metagraph
     if metagraph is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
