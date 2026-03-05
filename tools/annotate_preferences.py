@@ -389,8 +389,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Scan pairs from either local filesystem or database
     if args.source == "db":
-        print(f"Loading pairs from database: {args.db_url[:40]}...")
-        pairs = scan_db(args.db_url, same_challenge=args.same_challenge)
+        print("Error: --source db is no longer supported. Database now lives in the platform API.")
+        print("Use the web UI annotation interface at /annotate instead.")
+        return 1
     else:
         storage_dir = Path(args.storage_dir)
         if not storage_dir.is_dir():

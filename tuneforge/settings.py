@@ -154,85 +154,28 @@ class Settings(BaseSettings):
         description="Blocks between weight setting attempts"
     )
 
-    # API server configuration
+    # Subnet API server configuration
     api_host: str = Field(default="0.0.0.0", description="API server host")
     api_port: int = Field(default=8000, description="API server port")
     api_max_queue_size: int = Field(default=100, description="Max pending API requests")
-    api_rate_limit: int = Field(default=10, description="Requests per minute per client")
 
-    # Storage configuration
-    storage_backend: Literal["local", "s3", "postgres"] = Field(
-        default="local",
-        description="Storage backend for generated audio (local, s3, or postgres)"
-    )
+    # Storage (local filesystem for leaderboard snapshots and audio fallback)
     storage_path: str = Field(
         default="./storage",
-        description="Local storage path for audio files"
-    )
-    s3_bucket: Optional[str] = Field(default=None, description="S3 bucket name")
-    s3_region: Optional[str] = Field(default=None, description="S3 region")
-    s3_access_key: Optional[str] = Field(default=None, description="S3 access key")
-    s3_secret_key: Optional[str] = Field(default=None, description="S3 secret key")
-
-    # Database configuration
-    db_url: str = Field(
-        default="postgresql+asyncpg://tuneforge:tuneforge_dev@localhost:5432/tuneforge",
-        description="PostgreSQL database URL (asyncpg)"
+        description="Local storage path for leaderboard snapshots and audio files"
     )
 
-    # Redis configuration
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        description="Redis connection URL"
-    )
-
-    # JWT authentication
-    jwt_secret: str = Field(
-        default="CHANGE_ME_IN_PRODUCTION",
-        description="Secret key for JWT token signing"
-    )
-    jwt_access_expire_minutes: int = Field(
-        default=15,
-        description="Access token expiry in minutes"
-    )
-    jwt_refresh_expire_days: int = Field(
-        default=7,
-        description="Refresh token expiry in days"
-    )
-
-    # Validator ↔ API integration
+    # Validator ↔ Platform API integration
     validator_api_url: str = Field(
         default="",
         description="Platform API base URL (e.g. https://tuneforge.io). Required for validators to push data.",
     )
     validator_api_token: str = Field(
         default="",
-        description="Service token validators send to authenticate with the API",
-    )
-    validator_service_token: str = Field(
-        default="",
-        description="Service token the API server accepts from validators",
-    )
-    validator_nonce_tolerance_ns: int = Field(
-        default=300_000_000_000,
-        description="Nonce tolerance window in nanoseconds (default 5 minutes)",
+        description="Bearer token validators send to authenticate with the platform API",
     )
 
-    # Google OAuth
-    google_client_id: Optional[str] = Field(
-        default=None,
-        description="Google OAuth client ID"
-    )
-    google_client_secret: Optional[str] = Field(
-        default=None,
-        description="Google OAuth client secret"
-    )
-    google_redirect_uri: str = Field(
-        default="http://localhost:8000/api/v1/auth/google/callback",
-        description="Google OAuth redirect URI"
-    )
-
-    # Frontend URL (for CORS and redirects)
+    # Frontend URL (for CORS)
     frontend_url: str = Field(
         default="http://localhost:3000",
         description="Frontend application URL"
