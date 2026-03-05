@@ -51,7 +51,7 @@ TuneForge's advantage: decentralized compute = lower marginal cost per generatio
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    tuneforge.io (Frontend)               │
-│         Next.js / React — Vercel or self-hosted          │
+│         Next.js / React — self-hosted on VPS             │
 │                                                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
 │  │  Landing  │ │ Generate │ │  Library │ │  Dashboard │  │
@@ -236,7 +236,7 @@ TuneForge's advantage: decentralized compute = lower marginal cost per generatio
 
 **This section is the highest-priority design brief for any agent working on the frontend. Read it fully before writing a single line of code.**
 
-The TuneForge frontend must be **indistinguishable from a VC-backed, Series-B startup product**. It should feel like a music platform first and a tech product second. Every pixel matters. Every interaction should feel intentional. The bar is SoundCloud's player experience, Spotify's visual polish, Linear's interaction design, and Vercel's typography.
+The TuneForge frontend must be **indistinguishable from a VC-backed, Series-B startup product**. It should feel like a music platform first and a tech product second. Every pixel matters. Every interaction should feel intentional. The bar is SoundCloud's player experience, Spotify's visual polish, and Linear's interaction design.
 
 **What we are NOT building:**
 - No generic admin-panel aesthetic (grey backgrounds, basic tables, default shadcn look)
@@ -586,7 +586,7 @@ This is the critical component that connects paying users to miner compute:
 #### 4.3 — Deployment
 
 - **API**: Docker container on AWS ECS, Railway, or Fly.io. Must run on a machine with Bittensor wallet access (for dendrite queries to miners).
-- **Frontend**: Vercel (Next.js) or Cloudflare Pages.
+- **Frontend**: Self-hosted on Linode VPS behind nginx.
 - **Domain**: tuneforge.io with SSL.
 - **Environment**: Staging + Production.
 
@@ -657,7 +657,7 @@ This is the critical component that connects paying users to miner compute:
 
 ## Key Design Decisions to Make
 
-1. **Frontend hosting**: Vercel (easiest for Next.js) vs self-hosted (more control)?
+1. **Frontend hosting**: Self-hosted on Linode VPS (decided).
 2. **Database provider**: Supabase (Postgres + auth built-in) vs standalone Postgres + custom auth?
 3. **Audio CDN**: CloudFront vs Cloudflare R2+CDN (cheaper)?
 4. **Queue system**: Redis queues vs simple in-memory for MVP?
