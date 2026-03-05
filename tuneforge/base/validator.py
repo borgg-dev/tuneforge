@@ -263,50 +263,108 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        """Main run loop for the validator."""
+        """Main run loop for the validator.
+
+        Runs the validation loop and (optionally) the organic generation
+        HTTP server concurrently on the same asyncio event loop.
+        """
         logger.info("Starting validator neuron…")
         self.setup()
         self.is_running = True
 
-        # Single event loop for the lifetime of the validator — reused across rounds
-        # so the dendrite's aiohttp session stays valid.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
-            while self.is_running and not self.should_exit:
-                try:
-                    if self.should_sync_metagraph():
-                        self.sync()
-
-                    # Run validation round
-                    response_event = loop.run_until_complete(
-                        self.run_validation_round()
-                    )
-
-                    # Process results
-                    self.process_round_results(response_event)
-
-                    # Weight setting is handled by WeightSetter in
-                    # TuneForgeValidator.run_validation_round() — the
-                    # duplicate BaseValidatorNeuron.set_weights() call
-                    # was removed because it overwrote the leaderboard's
-                    # steepened weights with flat EMA weights (NEW-01 fix).
-
-                    self.log_status()
-                    self.step += 1
-
-                    # Wait before next round
-                    self._wait_for_next_round()
-
-                except KeyboardInterrupt:
-                    break
-                except Exception as exc:
-                    logger.error(f"Error in validation loop: {exc}")
-                    time.sleep(60)
+            loop.run_until_complete(self._run_async())
         finally:
             loop.close()
             self.shutdown()
+
+    async def _run_async(self) -> None:
+        """Run validation loop and organic API server concurrently."""
+        tasks: list[asyncio.Task] = []
+
+        # Start organic API server if enabled
+        organic_server = await self._start_organic_api()
+        if organic_server is not None:
+            tasks.append(asyncio.create_task(organic_server.serve()))
+
+        # Run the validation loop
+        tasks.append(asyncio.create_task(self._validation_loop()))
+
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+    async def _start_organic_api(self):
+        """Start the organic generation HTTP server if enabled.
+
+        Returns a uvicorn.Server instance or None.
+        """
+        if not getattr(self.settings, "organic_api_enabled", False):
+            return None
+
+        try:
+            import uvicorn
+            from tuneforge.api.validator_api import create_validator_api
+
+            api_app = create_validator_api(self)
+            port = getattr(self.settings, "organic_api_port", 8090)
+            config = uvicorn.Config(
+                app=api_app,
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+                access_log=False,
+            )
+            server = uvicorn.Server(config)
+            logger.info("Organic API server will start on port {}", port)
+            return server
+        except Exception as exc:
+            logger.error("Failed to create organic API server: {}", exc)
+            return None
+
+    async def _validation_loop(self) -> None:
+        """Async validation loop — runs rounds with async sleep between them."""
+        loop = asyncio.get_event_loop()
+        while self.is_running and not self.should_exit:
+            try:
+                # Metagraph resync is handled inside run_validation_round()
+                # via run_in_executor, so we skip the blocking sync() here.
+
+                response_event = await self.run_validation_round()
+                self.process_round_results(response_event)
+
+                # log_status calls self.block (sync chain call), run in executor
+                await loop.run_in_executor(None, self.log_status)
+                self.step += 1
+
+                # Async sleep so the event loop stays free for organic requests
+                elapsed = time.time() - self.round_start_time
+                remaining = self.settings.validation_interval - elapsed
+                if remaining > 0:
+                    logger.info(f"Waiting {remaining:.0f}s until next round…")
+                    await self._async_wait(remaining)
+
+            except asyncio.CancelledError:
+                break
+            except KeyboardInterrupt:
+                break
+            except Exception as exc:
+                logger.error(f"Error in validation loop: {exc}")
+                await asyncio.sleep(60)
+
+    async def _async_wait(self, seconds: float) -> None:
+        """Wait in 1-second increments, checking should_exit."""
+        end_time = time.time() + seconds
+        while time.time() < end_time and not self.should_exit:
+            await asyncio.sleep(1)
 
     def process_round_results(self, response_event: DendriteResponseEvent) -> None:
         """
@@ -315,17 +373,6 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         Override in subclasses to implement specific scoring logic.
         """
         logger.debug(f"Processing round results: {response_event.summary()}")
-
-    def _wait_for_next_round(self) -> None:
-        """Wait the appropriate interval before the next round."""
-        elapsed = time.time() - self.round_start_time
-        remaining = self.settings.validation_interval - elapsed
-        if remaining > 0:
-            logger.info(f"Waiting {remaining:.0f}s until next round…")
-            # Sleep in short intervals so Ctrl+C / SIGTERM is responsive
-            end_time = time.time() + remaining
-            while time.time() < end_time and not self.should_exit:
-                time.sleep(1)
 
     def shutdown(self) -> None:
         """Shut down the validator cleanly."""

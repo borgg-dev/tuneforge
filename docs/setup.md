@@ -8,7 +8,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 
 1. [Architecture Overview](#architecture-overview)
 2. [Validation Flow](#validation-flow)
-3. [Organic Query Flow](#organic-query-flow)
+3. [Organic Generation Flow](#organic-generation-flow)
 4. [Scoring Pipeline](#scoring-pipeline)
 5. [Protocol Definitions](#protocol-definitions)
 6. [Prerequisites](#prerequisites)
@@ -26,7 +26,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 
 ## Architecture Overview
 
-TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 11 dimensions, maintain an EMA leaderboard, and set on-chain weights. An optional SaaS API layer provides organic query routing, user authentication, and a credit system.
+TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 11 dimensions, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
 
 ```mermaid
 flowchart TB
@@ -50,7 +50,6 @@ flowchart TB
 
     subgraph API["SaaS API Layer"]
         FE[FastAPI Server]
-        OR[OrganicQueryRouter]
         DB[(PostgreSQL)]
         RD[(Redis)]
     end
@@ -61,11 +60,10 @@ flowchart TB
     LB -->|EMA snapshot| WS
     WS -->|set_weights| Chain
 
-    FE -->|organic request| OR
-    OR -->|reads| LB
-    OR -->|MusicGenerationSynapse is_organic=True| Miners
-    Miners -->|audio| OR
-    OR -->|audio bytes| FE
+    FE -->|POST /organic/generate| Validator
+    Validator -->|fan-out top 10 by EMA| Miners
+    Miners -->|audio| Validator
+    Validator -->|top N results| FE
 
     FE --> DB
     FE --> RD
@@ -119,40 +117,19 @@ Step-by-step:
 
 ---
 
-## Organic Query Flow
+## Organic Generation Flow
 
-Organic queries originate from the SaaS API and do not affect scores or weights.
+Organic requests from the SaaS backend flow through the validator's built-in HTTP API (port 8090):
 
-```mermaid
-sequenceDiagram
-    participant U as API Caller
-    participant API as FastAPI Server
-    participant OR as OrganicQueryRouter
-    participant LB as Leaderboard Snapshot
-    participant M as Miner
-    participant QG as Quality Gate
-
-    U->>API: POST /generate
-    API->>OR: Route organic request
-    OR->>LB: Read leaderboard snapshot
-    Note over OR: Pick best miner:<br/>highest EMA / (1 + active * 0.5)<br/>filter by EMA threshold,<br/>serving status, capacity
-    OR->>M: MusicGenerationSynapse (is_organic=True) via dendrite
-    M->>OR: Audio response
-    OR->>QG: Validate: non-silent, correct duration, no clipping
-    alt Quality check passes
-        QG->>API: Return audio bytes
-        API->>U: Audio response
-    else Quality check fails
-        QG->>OR: Reject, try next-best miner (up to 3 retries)
-    end
+```
+SaaS Backend → POST /organic/generate → Validator
+Validator → fan-out to top 10 miners by EMA (30s timeout)
+Validator → score all responses (same 11-signal pipeline)
+Validator → update EMA leaderboard
+Validator → return top N results to SaaS Backend
 ```
 
-Key properties of organic routing:
-
-- Miner selection formula: `highest EMA / (1 + active_requests * 0.5)`, filtered by EMA threshold, serving status, and capacity.
-- Quality gate checks: non-silent audio, correct duration, no clipping.
-- On failure, the router retries with the next-best miner, up to 3 attempts.
-- Organic queries do **not** affect miner scores or on-chain weights.
+The validator runs the organic API server and the challenge validation loop concurrently on the same asyncio event loop. Scoring models are protected by a lock, and CPU-bound scoring runs in a thread pool executor so organic requests aren't blocked by challenge rounds.
 
 ---
 
@@ -221,7 +198,7 @@ Each validation round applies a random perturbation of up to +/-20% to the compo
 
 ### Leaderboard EMA
 
-Raw round scores are smoothed with exponential moving average (alpha = 0.2). The steepening function applies a power transform (power 2.0) above a baseline of 0.35 to separate high-quality miners from the rest.
+Raw round scores are smoothed with exponential moving average (alpha = 0.2). The steepening function applies a power transform (power 2.0) above a baseline of 0.50 to separate high-quality miners from the rest: `((ema - 0.50) / 0.50) ^ 2.0`.
 
 ---
 
@@ -585,7 +562,7 @@ Must sum to 1.0. These control the internal breakdown of the `quality` component
 |----------|------|---------|-------------|
 | `TF_EMA_ALPHA` | float | `0.2` | EMA smoothing factor (higher = faster adaptation) |
 | `TF_EMA_WARMUP` | int | `9` | Warmup rounds (kept for reference, no longer used as a gate) |
-| `TF_STEEPEN_BASELINE` | float | `0.35` | Score baseline for steepening function |
+| `TF_STEEPEN_BASELINE` | float | `0.50` | Score baseline for steepening function |
 | `TF_STEEPEN_POWER` | float | `2.0` | Exponent for steepening above baseline |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between on-chain weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
@@ -654,6 +631,8 @@ Must sum to 1.0. These control the internal breakdown of the `quality` component
 | `TF_FRONTEND_URL` | str | `http://localhost:3000` | Frontend URL (used for CORS) |
 | `TF_VALIDATOR_API_URL` | str | `""` | Platform API base URL for validator data push |
 | `TF_VALIDATOR_API_TOKEN` | str | `""` | Bearer token for validator-to-API authentication |
+| `TF_ORGANIC_API_ENABLED` | bool | `true` | Enable organic generation API on validator |
+| `TF_ORGANIC_API_PORT` | int | `8090` | Port for the validator's organic API |
 
 ### Logging
 
@@ -838,7 +817,7 @@ tuneforge/
       auth.py                # 3-mode authentication
       jwt_auth.py            # JWT + password hashing
       credits.py             # Credit system
-      organic_router.py      # Miner selection + quality gate
+      validator_api.py       # Organic generation API (runs inside validator)
       redis_manager.py       # Rate limiting + SSE pub/sub
       sse.py                 # Server-sent events
       validator_auth.py      # Validator service token auth

@@ -48,19 +48,17 @@ graph TB
         M3[Miner N<br/>...]
     end
 
-    subgraph "SaaS Layer (Optional)"
-        API[FastAPI Server]
-        OR[Organic Router]
-        SSE[SSE Events]
+    subgraph "SaaS Backend (Optional)"
+        API[SaaS Platform]
     end
 
     subgraph Bittensor
         CH[Chain / Subtensor]
     end
 
-    V -->|dendrite| M1
-    V -->|dendrite| M2
-    V -->|dendrite| M3
+    V -->|challenge dendrite| M1
+    V -->|challenge dendrite| M2
+    V -->|challenge dendrite| M3
     M1 -->|axon response| SC
     M2 -->|axon response| SC
     M3 -->|axon response| SC
@@ -69,16 +67,16 @@ graph TB
     LB --> WS
     WS -->|set_weights| CH
 
-    API -->|organic queries| OR
-    OR -->|EMA-ranked selection| M1
-    OR -->|EMA-ranked selection| M2
+    API -->|organic request| V
+    V -->|organic fan-out| M1
+    V -->|organic fan-out| M2
 ```
 
 **Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 11 quality signals, maintain an EMA leaderboard, apply steepening, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen small/medium/large or Stable Audio), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO.
 
-**Organic Router** (optional SaaS layer) routes real user requests to top-performing miners based on EMA scores. Organic queries do not affect on-chain weights -- they are a separate revenue channel.
+**Organic Generation** (optional) allows real user requests from the SaaS backend to flow through the validator. The validator fans out organic prompts to the top 10 miners by EMA, scores all responses with the same 11-signal pipeline, updates the EMA leaderboard, and returns the best results to the customer. Organic and challenge scoring coexist on the same event loop and feed the same EMA.
 
 ## Quick Start
 
@@ -223,14 +221,16 @@ Each miner's long-term performance is tracked via an exponential moving average:
 ema_new = 0.2 * round_score + 0.8 * ema_old
 ```
 
+New miners start with EMA = 0.0 and ramp up gradually through the EMA formula. A miner consistently scoring 0.7 takes ~8 rounds (~40 minutes) to cross the steepening baseline and begin receiving weight. This cold-start behaviour prevents a single good round from granting immediate ranking.
+
 The EMA alpha of 0.2 (`TF_EMA_ALPHA`) balances responsiveness to recent performance with stability against outlier rounds.
 
 ### Steepening
 
 Raw EMA scores are transformed before weight submission to reward top performers disproportionately:
 
-1. Miners with EMA below the baseline of 0.35 (`TF_STEEPEN_BASELINE`) receive zero weight.
-2. Miners above baseline are mapped: `weight = ((ema - 0.35) / 0.65) ^ 2.0`
+1. Miners with EMA below the baseline of 0.50 (`TF_STEEPEN_BASELINE`) receive zero weight.
+2. Miners above baseline are mapped: `weight = ((ema - 0.50) / 0.50) ^ 2.0`
 
 The power of 2.0 (`TF_STEEPEN_POWER`) creates a convex curve that concentrates emissions on consistently high-performing miners.
 
@@ -325,7 +325,7 @@ All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table a
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_EMA_ALPHA` | float | 0.2 | EMA smoothing factor |
-| `TF_STEEPEN_BASELINE` | float | 0.35 | Min EMA for nonzero weight |
+| `TF_STEEPEN_BASELINE` | float | 0.50 | Min EMA for nonzero weight |
 | `TF_STEEPEN_POWER` | float | 2.0 | Steepening exponent |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | 115 | Blocks between weight sets |
 
@@ -371,6 +371,13 @@ All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table a
 | `TF_STORAGE_PATH` | str | ./storage | Local storage path |
 | `TF_FRONTEND_URL` | str | http://localhost:3000 | Frontend URL for CORS |
 
+### Organic API (Validator)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_ORGANIC_API_ENABLED` | bool | true | Enable organic generation API on validator |
+| `TF_ORGANIC_API_PORT` | int | 8090 | Port for the validator's organic API |
+
 ### Preference Model
 
 | Variable | Type | Default | Description |
@@ -413,8 +420,8 @@ tuneforge/
 │   ├── __init__.py             -- Version, constants
 │   ├── settings.py             -- Pydantic settings (TF_ env vars)
 │   ├── api/
-│   │   ├── server.py           -- FastAPI application
-│   │   ├── organic_router.py   -- EMA-based miner selection for organic queries
+│   │   ├── server.py           -- SaaS platform FastAPI application
+│   │   ├── validator_api.py    -- Organic generation API (runs inside validator)
 │   │   └── routes/             -- API route handlers
 │   ├── base/
 │   │   ├── neuron.py           -- Base neuron class

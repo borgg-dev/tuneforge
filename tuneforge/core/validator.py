@@ -6,10 +6,12 @@ challenge generation → miner querying → multi-signal scoring →
 EMA leaderboard → on-chain weight setting.
 """
 
+import asyncio
 import base64
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,6 +67,13 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._weight_setter: WeightSetter | None = None  # init after setup
         self._last_model_check: float = 0.0
         self._current_model_sha: str = ""
+
+        # Concurrency: serialise scoring so challenge rounds and organic
+        # requests don't corrupt shared model state (CLAP, MERT, etc.).
+        # Scoring runs in a thread pool so it doesn't block the event loop
+        # (keeps organic API responsive during challenge scoring).
+        self._scoring_lock = asyncio.Lock()
+        self._scoring_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scorer")
 
         logger.info("TuneForgeValidator initialised")
 
@@ -125,7 +134,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
         logger.info(f"=== Validation round {self.current_round} ===")
 
         # 0. Force metagraph resync to get fresh axon data
-        self.resync_metagraph()
+        # Run in executor — this is a synchronous chain call that would
+        # block the event loop and freeze the organic API server.
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.resync_metagraph)
+
+        # Cache block number once (synchronous chain call) so we don't
+        # call self.block multiple times during the round.
+        current_block = await loop.run_in_executor(None, lambda: self.block)
 
         # 1. Generate challenge prompt
         challenge = self._prompt_generator.generate_challenge()
@@ -150,7 +166,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
             logger.warning("No miners in subset — empty round")
             return DendriteResponseEvent(
                 round_id=challenge["challenge_id"],
-                block_number=self.block,
+                block_number=current_block,
                 validator_uid=self.uid or -1,
             )
 
@@ -192,7 +208,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         # Build response event
         event = DendriteResponseEvent(
             round_id=challenge["challenge_id"],
-            block_number=self.block,
+            block_number=current_block,
             validator_uid=self.uid or -1,
             round_start_time=self.round_start_time,
         )
@@ -289,10 +305,17 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 except Exception as exc:
                     logger.warning(f"Failed to save audio for UID {uid}: {exc}")
 
-        # 5. Score all responses
+        # 5. Score all responses (under lock, in thread pool to not block event loop)
         if valid_responses:
             try:
-                rewards = self._reward_model.score_batch(valid_responses, valid_hotkeys)
+                async with self._scoring_lock:
+                    loop = asyncio.get_event_loop()
+                    rewards = await loop.run_in_executor(
+                        self._scoring_executor,
+                        self._reward_model.score_batch,
+                        valid_responses,
+                        valid_hotkeys,
+                    )
             except Exception as exc:
                 logger.error(f"Scoring failed: {exc}")
                 rewards = [0.0] * len(valid_responses)
@@ -339,10 +362,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
             logger.warning(f"Failed to save leaderboard snapshot: {exc}")
 
         # 9. Set weights via weight setter
+        # Run in executor — set_weights is a synchronous chain call
+        # (wait_for_finalization=True) that blocks for 10-20s.
         if self._weight_setter is not None:
             try:
                 self._weight_setter.update_metagraph(self.metagraph)
-                self._weight_setter.set_weights(self._leaderboard)
+                await loop.run_in_executor(
+                    None, self._weight_setter.set_weights, self._leaderboard
+                )
             except Exception as exc:
                 logger.error(f"Weight setting failed: {exc}")
 
@@ -410,6 +437,205 @@ class TuneForgeValidator(BaseValidatorNeuron):
             )
         except Exception as exc:
             logger.debug(f"Preference model check failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # Organic generation (fan-out → score → rank)
+    # ------------------------------------------------------------------
+
+    # Maximum miners to query for organic requests.  Querying fewer
+    # miners keeps customer latency low while still getting competitive
+    # quality.  The top-K are selected by EMA (best proven quality first).
+    ORGANIC_TOP_K: int = 10
+
+    # Shorter dendrite timeout for organic — don't let slow miners hold
+    # up the customer.  Good miners respond in 5-15s.
+    ORGANIC_TIMEOUT: float = 30.0
+
+    async def run_organic_generation(
+        self,
+        prompt: str,
+        genre: str = "",
+        mood: str = "",
+        tempo_bpm: int = 120,
+        duration_seconds: float = 15.0,
+        key_signature: str | None = None,
+        instruments: list[str] | None = None,
+        request_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Fan out an organic request to top-K miners, score, return ranked results.
+
+        Design for low customer latency:
+        1. Pick top K miners by EMA (proven quality, fast responders)
+        2. Use a short dendrite timeout (30s vs 120s for challenges)
+        3. Score only the valid responses that arrived in time
+        4. Update leaderboard (organic scores feed the same EMA)
+        5. Return results ranked by composite score
+
+        Returns a list of dicts sorted by composite_score descending.
+        """
+        # Build synapse
+        synapse = MusicGenerationSynapse(
+            prompt=prompt,
+            genre=genre,
+            mood=mood,
+            tempo_bpm=tempo_bpm,
+            duration_seconds=duration_seconds,
+            key_signature=key_signature,
+            instruments=instruments,
+            challenge_id=request_id or hashlib.md5(prompt.encode()).hexdigest()[:16],
+            is_organic=True,
+        )
+
+        # Select top-K miners by EMA (best quality first)
+        miner_uids = self._get_top_miners_by_ema(self.ORGANIC_TOP_K)
+        if not miner_uids:
+            logger.warning("[ORGANIC] No serving miners available")
+            return []
+
+        logger.info(
+            "[ORGANIC] Querying top {} miners (of {} serving) for request {}",
+            len(miner_uids),
+            len(self._get_serving_miners()),
+            request_id,
+        )
+
+        # Fan out with shorter timeout — don't wait for slow miners
+        axons = [self.metagraph.axons[uid] for uid in miner_uids]
+        try:
+            responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
+                axons=axons,
+                synapse=synapse,
+                timeout=self.ORGANIC_TIMEOUT,
+                deserialize=False,
+            )
+        except Exception as exc:
+            logger.error("[ORGANIC] Dendrite fan-out failed: {}", exc)
+            return []
+
+        # Collect valid responses
+        valid_responses: list[MusicGenerationSynapse] = []
+        valid_uids: list[int] = []
+        valid_hotkeys: list[str] = []
+
+        for uid, resp in zip(miner_uids, responses):
+            if resp is None:
+                continue
+            if resp.audio_b64 is None:
+                continue
+            valid_responses.append(resp)
+            valid_uids.append(uid)
+            try:
+                valid_hotkeys.append(self.metagraph.hotkeys[uid])
+            except (IndexError, AttributeError):
+                valid_hotkeys.append(f"uid-{uid}")
+
+        logger.info(
+            "[ORGANIC] Got {}/{} valid responses for request {}",
+            len(valid_responses), len(miner_uids), request_id,
+        )
+
+        if not valid_responses:
+            return []
+
+        # Score valid responses (under lock, in thread pool so event loop stays free)
+        try:
+            async with self._scoring_lock:
+                loop = asyncio.get_event_loop()
+                rewards = await loop.run_in_executor(
+                    self._scoring_executor,
+                    self._reward_model.score_batch,
+                    valid_responses,
+                    valid_hotkeys,
+                )
+        except Exception as exc:
+            logger.error("[ORGANIC] Scoring failed: {}", exc)
+            rewards = [0.0] * len(valid_responses)
+
+        # Update leaderboard — organic scores feed the same EMA
+        for uid, reward in zip(valid_uids, rewards):
+            self._leaderboard.update(uid, reward)
+        self.update_scores(valid_uids, rewards)
+
+        logger.info(
+            "[ORGANIC] Leaderboard updated with {} organic scores",
+            len(valid_uids),
+        )
+
+        # Build ranked results
+        results: list[dict[str, Any]] = []
+        for uid, hotkey, resp, score in zip(valid_uids, valid_hotkeys, valid_responses, rewards):
+            audio_bytes = resp.deserialize()
+            if audio_bytes is None:
+                continue
+            results.append({
+                "miner_uid": uid,
+                "miner_hotkey": hotkey,
+                "audio_bytes": audio_bytes,
+                "sample_rate": resp.sample_rate or self.settings.generation_sample_rate,
+                "generation_time_ms": resp.generation_time_ms or 0,
+                "model_id": resp.model_id,
+                "composite_score": round(score, 4),
+                "total_queried": len(miner_uids),
+                "total_valid": len(valid_responses),
+            })
+
+        # Sort by score descending
+        results.sort(key=lambda r: r["composite_score"], reverse=True)
+
+        for i, r in enumerate(results[:5]):
+            logger.info(
+                "[ORGANIC] #{}: UID {} score={:.4f} time={}ms",
+                i + 1, r["miner_uid"], r["composite_score"], r["generation_time_ms"],
+            )
+
+        return results
+
+    def _get_serving_miners(self) -> list[int]:
+        """Get UIDs of all serving miners (exclude self)."""
+        uids: list[int] = []
+        try:
+            total = len(self.metagraph.S)
+            for uid in range(total):
+                if uid == self.uid:
+                    continue
+                try:
+                    if self.metagraph.axons[uid].is_serving:
+                        uids.append(uid)
+                except (IndexError, AttributeError):
+                    continue
+        except Exception as exc:
+            logger.error("[ORGANIC] Failed to get serving miners: {}", exc)
+        return uids
+
+    def _get_top_miners_by_ema(self, k: int) -> list[int]:
+        """Get the top-K serving miners ranked by EMA score.
+
+        Miners with proven quality (high EMA from challenge rounds)
+        are most likely to produce good organic results quickly.
+        Falls back to all serving miners if leaderboard is empty.
+        """
+        serving = self._get_serving_miners()
+        if not serving:
+            return []
+
+        # Rank by EMA descending, then take top K
+        scored = [
+            (uid, self._leaderboard.get_ema(uid))
+            for uid in serving
+        ]
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        top_k = [uid for uid, _ in scored[:k]]
+
+        if top_k:
+            best_ema = self._leaderboard.get_ema(top_k[0])
+            worst_ema = self._leaderboard.get_ema(top_k[-1])
+            logger.debug(
+                "[ORGANIC] Top-{} miners: EMA range [{:.4f}, {:.4f}]",
+                len(top_k), worst_ema, best_ema,
+            )
+
+        return top_k
 
     # ------------------------------------------------------------------
     # Overrides

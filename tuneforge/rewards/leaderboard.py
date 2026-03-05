@@ -56,9 +56,8 @@ class MinerLeaderboard:
         count = self._rounds.get(uid, 0)
 
         if uid not in self._ema:
-            self._ema[uid] = raw_score
-        else:
-            self._ema[uid] = self._alpha * raw_score + (1.0 - self._alpha) * self._ema[uid]
+            self._ema[uid] = 0.0
+        self._ema[uid] = self._alpha * raw_score + (1.0 - self._alpha) * self._ema[uid]
 
         self._rounds[uid] = count + 1
 

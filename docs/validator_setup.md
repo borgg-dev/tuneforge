@@ -14,7 +14,7 @@ A TuneForge validator performs the following duties:
 4. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time.
 5. **Applies a steepening function** to amplify high performers and zero out low performers.
 6. **Submits normalized weights** to the Bittensor chain every 115 blocks.
-7. **Optionally routes organic SaaS queries** to miners. Organic queries do not affect weights.
+7. **Handles organic SaaS queries** by fan-out to top miners, scoring responses, and updating EMA.
 8. **Optionally pushes round data** to the platform API (`TF_VALIDATOR_API_URL`).
 9. **Auto-updates the preference model** from the platform API (checks hourly, downloads if SHA256 changed).
 
@@ -95,7 +95,7 @@ Create a file named `.env.validator` in the project root. All variables use the 
 |----------|------|---------|-------------|
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
 | `TF_EMA_ALPHA` | float | `0.2` | EMA smoothing factor |
-| `TF_STEEPEN_BASELINE` | float | `0.35` | Minimum EMA for nonzero weight |
+| `TF_STEEPEN_BASELINE` | float | `0.50` | Minimum EMA for nonzero weight |
 | `TF_STEEPEN_POWER` | float | `2.0` | Steepening exponent |
 | `TF_WEIGHT_PERTURBATION` | float | `0.20` | Per-round weight perturbation (plus or minus %) |
 
@@ -282,25 +282,27 @@ ema_new = alpha * raw_score + (1 - alpha) * ema_old
 
 where `alpha = 0.2` by default (`TF_EMA_ALPHA`). The first score for a miner initializes the EMA directly. Higher alpha values make the EMA more responsive to recent rounds.
 
+New miners start with EMA = 0.0 and ramp up gradually. A miner consistently scoring 0.7 takes ~8 rounds to cross the baseline.
+
 ### Steepening Function
 
 The steepening function converts EMA scores into weights, amplifying top performers and zeroing out underperformers.
 
-- Miners with EMA at or below the baseline (0.35) receive weight = 0.
+- Miners with EMA at or below the baseline (0.50) receive weight = 0.
 - Above the baseline:
 
 ```
 weight = ((ema - baseline) / (1 - baseline)) ^ power
 ```
 
-With default settings (`baseline = 0.35`, `power = 2.0`):
+With default settings (`baseline = 0.50`, `power = 2.0`):
 
 | EMA Score | Calculation | Weight |
 |-----------|-------------|--------|
-| 0.35 | 0.0 | 0.000 |
-| 0.50 | ((0.50 - 0.35) / 0.65)^2 = 0.231^2 | 0.053 |
-| 0.70 | ((0.70 - 0.35) / 0.65)^2 = 0.538^2 | 0.290 |
-| 0.90 | ((0.90 - 0.35) / 0.65)^2 = 0.846^2 | 0.716 |
+| 0.50 | 0.0 | 0.000 |
+| 0.60 | ((0.60 - 0.50) / 0.50)^2 = 0.20^2 | 0.040 |
+| 0.70 | ((0.70 - 0.50) / 0.50)^2 = 0.40^2 | 0.160 |
+| 0.90 | ((0.90 - 0.50) / 0.50)^2 = 0.80^2 | 0.640 |
 
 Only consistently high-quality miners earn meaningful rewards.
 
@@ -313,17 +315,21 @@ Only consistently high-quality miners earn meaningful rewards.
 
 ---
 
-## Organic Query Router
+## Organic Generation
 
-The organic query router handles SaaS API requests by forwarding them to the best available miner. Key properties:
+Organic requests from the SaaS backend are handled directly by the validator via its built-in HTTP API (port 8090 by default). The flow:
 
-- **Miner selection**: picks the miner with the highest effective score, calculated as `ema / (1 + active * 0.5)`, where `active` is the number of in-flight requests for that miner.
-- **Load balancing**: maximum of 3 active requests per miner (`MAX_ACTIVE_PER_MINER`).
-- **Retry logic**: up to 3 attempts with different miners on failure.
-- **Quality gate**: responses must be non-silent, of reasonable duration, and free of clipping.
-- **Miner penalty**: miners with poor organic success rates are deprioritized.
-- **No weight impact**: organic queries do not affect validation scores or chain weights.
-- **Leaderboard refresh**: the leaderboard snapshot is reloaded every 60 seconds from `storage/leaderboard.json`.
+1. SaaS backend sends a POST to the validator's `/organic/generate` endpoint.
+2. Validator selects the top 10 miners by EMA (best proven quality).
+3. Fan-out: the prompt is sent to all 10 miners with a 30-second timeout.
+4. All valid responses are scored with the same 11-signal pipeline used for challenges.
+5. Scores update the EMA leaderboard (organic and challenge scores share the same EMA).
+6. The top N results (by composite score) are returned to the SaaS backend.
+
+Key design properties:
+- **Low latency**: top-K selection (10 miners) + 30s timeout keeps response time ~20-25s.
+- **Coexistence**: organic requests run concurrently with challenge rounds on the same async event loop. Scoring models are protected by an asyncio lock, and CPU-bound scoring runs in a thread pool executor.
+- **Fair EMA**: organic scores feed the same EMA as challenges. Poor performance on organic requests lowers a miner's EMA just like a bad challenge round.
 
 ---
 

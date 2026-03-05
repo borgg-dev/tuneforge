@@ -159,6 +159,16 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, description="API server port")
     api_max_queue_size: int = Field(default=100, description="Max pending API requests")
 
+    # Validator organic API (HTTP server inside the validator process)
+    organic_api_enabled: bool = Field(
+        default=True,
+        description="Enable organic generation API on the validator",
+    )
+    organic_api_port: int = Field(
+        default=8090,
+        description="Port for the validator's organic generation API",
+    )
+
     # Storage (local filesystem for leaderboard snapshots and audio fallback)
     storage_path: str = Field(
         default="./storage",
