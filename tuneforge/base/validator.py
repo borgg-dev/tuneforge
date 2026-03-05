@@ -75,7 +75,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     # ------------------------------------------------------------------
 
     def setup(self) -> None:
-        """Set up the validator (registration, dendrite, axon, weight arrays)."""
+        """Set up the validator (registration, dendrite, weight arrays)."""
         logger.info("Setting up validator…")
 
         if not self.check_registered():
@@ -86,40 +86,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         self.scores = np.zeros(n_uids, dtype=np.float32)
         self.weights = np.zeros(n_uids, dtype=np.float32)
 
-        # Serve axon so the validator's IP is discoverable on the metagraph.
-        # The axon itself doesn't handle synapses — it just registers the IP
-        # so the platform API can locate the validator's HTTP API.
-        if not self.settings.neuron_axon_off:
-            self._serve_axon()
-
         logger.info(f"Validator setup complete. UID: {self.uid}")
-
-    def _serve_axon(self) -> None:
-        """Start and register axon on-chain for IP discoverability."""
-        if self.settings.axon_port:
-            self._axon = bt.Axon(wallet=self.wallet, port=self.settings.axon_port)
-        else:
-            self._axon = bt.Axon(wallet=self.wallet)
-        self._axon.start()
-        logger.info(f"Validator axon serving on port {self._axon.port}")
-
-        # Register on-chain with retry
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                self.subtensor.serve_axon(
-                    netuid=self.settings.netuid,
-                    axon=self._axon,
-                )
-                logger.info("Validator axon registered on-chain")
-                return
-            except Exception as exc:
-                if attempt < max_retries - 1:
-                    wait = 2 ** attempt * 10
-                    logger.warning(f"Axon registration attempt {attempt + 1} failed: {exc}, retrying in {wait}s")
-                    time.sleep(wait)
-                else:
-                    logger.error(f"Failed to register validator axon after {max_retries} attempts: {exc}")
 
     # ------------------------------------------------------------------
     # Weight setting
@@ -364,11 +331,6 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         """Shut down the validator cleanly."""
         logger.info("Shutting down validator…")
         self.is_running = False
-        if hasattr(self, "_axon") and self._axon:
-            try:
-                self._axon.stop()
-            except Exception as exc:
-                logger.error(f"Error stopping validator axon: {exc}")
 
     def __enter__(self):
         """Context manager entry."""
