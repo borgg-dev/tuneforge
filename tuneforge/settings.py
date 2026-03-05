@@ -202,8 +202,8 @@ class Settings(BaseSettings):
 
     # Validator ↔ API integration
     validator_api_url: str = Field(
-        default="http://localhost:8000",
-        description="Platform API base URL (used by validators to push data)",
+        default="",
+        description="Platform API base URL (e.g. https://tuneforge.io). Required for validators to push data.",
     )
     validator_api_token: str = Field(
         default="",
