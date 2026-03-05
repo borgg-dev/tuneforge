@@ -27,6 +27,7 @@ class TrackInfo(BaseModel):
 
     track_id: str
     audio_url: str
+    audio_b64: str | None = Field(default=None, description="Base64-encoded audio bytes")
     duration_seconds: float
     sample_rate: int
     format: str

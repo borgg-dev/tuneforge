@@ -5,6 +5,7 @@ Routes organic generation requests to miners via the organic query router.
 No credits, no database, no SSE — that's all handled by the platform API.
 """
 
+import base64
 import io
 import time
 import uuid
@@ -75,7 +76,8 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
             tracks.append(
                 TrackInfo(
                     track_id=uuid.uuid4().hex,
-                    audio_url="",  # Platform handles storage
+                    audio_url="",
+                    audio_b64=base64.b64encode(converted).decode("ascii"),
                     duration_seconds=request.duration_seconds,
                     sample_rate=sr,
                     format=request.format,
@@ -136,6 +138,7 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
                 TrackInfo(
                     track_id=uuid.uuid4().hex,
                     audio_url="",
+                    audio_b64=base64.b64encode(converted).decode("ascii"),
                     duration_seconds=request.duration_seconds,
                     sample_rate=sr,
                     format=request.format,
