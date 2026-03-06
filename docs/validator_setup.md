@@ -8,15 +8,17 @@ This document covers everything needed to run a TuneForge validator: hardware re
 
 A TuneForge validator performs the following duties:
 
-1. **Generates diverse music challenges** from a combinatorial space of genre, mood, tempo, key signature, instruments, and creative constraints (100,000+ unique combinations per challenge).
+1. **Generates diverse music challenges** from a combinatorial space of genre, mood, tempo, key signature, instruments, vocals/lyrics requests, and creative constraints (100,000+ unique combinations per challenge). Duration range: 1--180 seconds.
 2. **Sends challenges to miners** in batches via Bittensor dendrite.
-3. **Scores responses** across 11 independent dimensions plus a penalty system.
-4. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time.
-5. **Applies a steepening function** to amplify high performers and zero out low performers.
-6. **Submits normalized weights** to the Bittensor chain every 115 blocks.
-7. **Handles organic SaaS queries** by fan-out to top miners, scoring responses, and updating EMA.
-8. **Optionally pushes round data** to the platform API (`TF_VALIDATOR_API_URL`).
-9. **Auto-updates the preference model** from the platform API (checks hourly, downloads if SHA256 changed).
+3. **Scores responses** across 18 independent scoring dimensions, 4 penalty multipliers, and a set of hard-zero conditions.
+4. **Applies multi-scale evaluation** that adjusts scorer weights based on the requested duration (short, medium, long).
+5. **Applies genre-aware scoring** with per-genre targets across 9 genre families.
+6. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time. EMA state is persisted to disk.
+7. **Applies a steepening function** with a soft sigmoid floor to amplify high performers and suppress low performers.
+8. **Submits normalized weights** to the Bittensor chain every 115 blocks.
+9. **Handles organic SaaS queries** by fan-out to top miners, scoring responses, and updating EMA.
+10. **Optionally pushes round data** to the platform API (`TF_VALIDATOR_API_URL`).
+11. **Auto-updates the preference model** from the platform API (checks hourly, downloads if SHA256 changed).
 
 Entry point:
 
@@ -38,7 +40,7 @@ These values come from `min_compute.yml`.
 | Network | 50 Mbps up/down | 50 Mbps up/down |
 | GPU | Optional | 8 GB+ VRAM for fast CLAP/MERT scoring |
 
-A GPU is not required but significantly reduces scoring latency for the CLAP and MERT models.
+A GPU is not required but significantly reduces scoring latency for the CLAP, MERT, and Whisper models.
 
 ---
 
@@ -54,7 +56,7 @@ A GPU is not required but significantly reduces scoring latency for the CLAP and
 ## Installation
 
 ```bash
-git clone https://github.com/tuneforge-subnet/tuneforge.git
+git clone https://github.com/tuneforge-ai/tuneforge.git
 cd tuneforge
 python3 -m venv venv
 source venv/bin/activate
@@ -67,11 +69,13 @@ pip install -e .
 
 Create a file named `.env.validator` in the project root. All variables use the `TF_` prefix and are loaded by pydantic-settings.
 
+**Important:** Scoring weights and thresholds are hardcoded in the source code for consensus. Validators cannot modify them via environment variables. Only operational parameters listed below are configurable.
+
 ### Core Settings
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_NETUID` | int | `0` | Subnet UID (234 on testnet) |
+| `TF_NETUID` | int | `0` | Subnet UID |
 | `TF_SUBTENSOR_NETWORK` | str | None | Network name: `finney`, `test`, or `local` |
 | `TF_SUBTENSOR_CHAIN_ENDPOINT` | str | None | Custom chain endpoint URL |
 | `TF_WALLET_NAME` | str | `default` | Bittensor wallet name |
@@ -87,68 +91,53 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_VALIDATION_INTERVAL` | int | `300` | Seconds between validation rounds |
 | `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Number of miners to challenge per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
-| `TF_GENERATION_TIMEOUT` | int | `120` | Timeout for miner responses in seconds |
+| `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
+| `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 
-### Weight and EMA Settings
+### EMA Persistence
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
-| `TF_EMA_ALPHA` | float | `0.2` | EMA smoothing factor |
-| `TF_STEEPEN_BASELINE` | float | `0.50` | Minimum EMA for nonzero weight |
-| `TF_STEEPEN_POWER` | float | `2.0` | Steepening exponent |
-| `TF_WEIGHT_PERTURBATION` | float | `0.20` | Per-round weight perturbation (plus or minus %) |
-
-### Scoring Dimension Weights
-
-These control the relative importance of each scoring dimension. They must sum to 1.0 (before perturbation).
-
-| Variable | Default | Signal |
-|----------|---------|--------|
-| `TF_WEIGHT_CLAP` | `0.30` | CLAP adherence (prompt-audio similarity) |
-| `TF_WEIGHT_MUSICALITY` | `0.10` | Musicality |
-| `TF_WEIGHT_NEURAL_QUALITY` | `0.10` | Neural quality (MERT) |
-| `TF_WEIGHT_PRODUCTION` | `0.08` | Production quality |
-| `TF_WEIGHT_MELODY` | `0.07` | Melody coherence |
-| `TF_WEIGHT_STRUCTURAL` | `0.07` | Structural completeness |
-| `TF_WEIGHT_QUALITY` | `0.06` | Audio quality |
-| `TF_WEIGHT_PREFERENCE` | `0.06` | Preference model |
-| `TF_WEIGHT_VOCAL` | `0.06` | Vocal quality |
-| `TF_WEIGHT_DIVERSITY` | `0.05` | Diversity |
-| `TF_WEIGHT_SPEED` | `0.05` | Speed |
-| `TF_WEIGHT_ATTRIBUTE` | `0.00` | Attribute verification (opt-in) |
-
-### Scoring Thresholds
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TF_SELF_PLAGIARISM_THRESHOLD` | `0.80` | CLAP similarity above which audio is flagged as plagiarism |
-| `TF_SILENCE_THRESHOLD` | `0.01` | RMS level below which audio is considered silent |
-| `TF_DURATION_TOLERANCE` | `0.20` | Duration deviation within 20% incurs no penalty |
-| `TF_DURATION_TOLERANCE_MAX` | `0.50` | Duration deviation at 50% or beyond results in score 0 |
+| `TF_EMA_STATE_PATH` | str | `./ema_state.json` | Path to persist EMA state |
+| `TF_EMA_SAVE_INTERVAL` | int | `5` | Save EMA state every N blocks |
 
 ### Models and Storage
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TF_CLAP_MODEL` | `laion/clap-htsat-unfused` | CLAP model identifier |
-| `TF_MERT_MODEL` | `m-a-p/MERT-v1-95M` | MERT model identifier |
-| `TF_PREFERENCE_MODEL_PATH` | None | Path to a trained preference model |
-| `TF_STORAGE_PATH` | `./storage` | Storage directory for snapshots and audio |
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_PREFERENCE_MODEL_PATH` | str | None | Path to a trained preference model |
+| `TF_FAD_REFERENCE_STATS_PATH` | str | `./reference_fad_stats.npz` | Path to FAD reference statistics |
+| `TF_STORAGE_PATH` | str | `./storage` | Storage directory for snapshots and audio |
+
+### Security
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto-generated | Private nonce for weight perturbation seed. Never transmitted to miners. Auto-generated if not set, but set explicitly for reproducibility across restarts. |
 
 ### Platform API Integration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TF_VALIDATOR_API_URL` | `""` | Platform API URL for pushing round data |
-| `TF_VALIDATOR_API_TOKEN` | `""` | Bearer token for platform API authentication |
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_VALIDATOR_API_URL` | str | `""` | Platform API URL for pushing round data and preference model updates |
+| `TF_VALIDATOR_API_TOKEN` | str | `""` | Bearer token for platform API authentication |
 
-### Logging
+### Organic API
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TF_LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
-| `TF_LOG_DIR` | `/tmp/tuneforge` | Directory for log files |
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_ORGANIC_API_ENABLED` | bool | `true` | Enable the organic generation HTTP API |
+| `TF_ORGANIC_API_PORT` | int | `8090` | Port for the organic generation API |
+
+### Logging and Monitoring
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_LOG_LEVEL` | str | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `TF_LOG_DIR` | str | `/tmp/tuneforge` | Directory for log files |
+| `TF_WANDB_ENABLED` | bool | `false` | Enable Weights & Biases logging |
+| `TF_WANDB_ENTITY` | str | None | W&B entity (team or username) |
+| `TF_WANDB_PROJECT` | str | None | W&B project name |
 
 ### Minimal Example
 
@@ -194,79 +183,140 @@ The `Dockerfile.validator` uses `python:3.11-slim` (no CUDA) and pre-downloads t
 
 ## The Scoring Pipeline
 
-Every validation round, the validator scores each miner response across 11 dimensions and applies penalties. The final score is a weighted sum of dimension scores, multiplied by any applicable penalty factors.
+Every validation round, the validator scores each miner response across 18 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
 
-### 1. CLAP Adherence (30%)
+```
+final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+```
 
-Measures text-audio similarity using CLAP (`laion/clap-htsat-unfused`). The raw cosine similarity between the text prompt embedding and the audio embedding is remapped from the range [0.15, 0.60] to [0, 1]. This is the single most important signal: does the generated audio match the prompt?
+All scoring weights and thresholds described below are **hardcoded for consensus**. Validators cannot modify them. This ensures all validators produce consistent scores.
 
-### 2. Musicality (10%)
+### The 18 Scoring Dimensions
 
-Evaluates pitch stability, harmonic structure, rhythm consistency, and arrangement quality. Scoring targets are genre-aware, applying different expectations per style.
+| # | Scorer | Weight | Description |
+|---|--------|--------|-------------|
+| 1 | **CLAP Adherence** | 0.15 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity between text prompt embedding and audio embedding is remapped from [0.15, 0.75] to [0, 1]. The primary signal: does the audio match the prompt? |
+| 2 | **Attribute Verification** | 0.09 | Verifies specific musical attributes (tempo, key, instruments) via librosa analysis and CLAP zero-shot classification. |
+| 3 | **Musicality** | 0.09 | Pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement quality. Genre-aware targets. One-sided minimum floor (not bell curve). |
+| 4 | **Vocal Lyrics** | 0.08 | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, and sibilance control. Returns neutral 0.5 for instrumental genres unless `vocals_requested=True`. |
+| 5 | **Diversity** | 0.08 | CLAP embedding diversity across a 50-entry history per miner. Computed as 70% intra-miner diversity + 30% population-level diversity bonus. Miners recycling similar outputs score low. |
+| 6 | **Preference Model** | 0.07 base | Perceptual quality via trained preference head. Bootstrap mode returns neutral 0.5 (effective weight 0%). Auto-scales from 2% to 20% via PreferenceWeightScaler as the model trains and gains accuracy. |
+| 7 | **Melody Coherence** | 0.06 | Interval quality, pitch contour analysis, repetition structure, and memorability. One-sided minimum floor. |
+| 8 | **Structural Completeness** | 0.06 | Section count, section variety, intro/outro presence, and transition quality. One-sided minimum floor. No longer penalizes electronic music or strong openings. |
+| 9 | **Production Quality** | 0.05 | Spectral balance, frequency fullness, loudness consistency (LUFS), dynamic expressiveness, and stereo width. Genre-aware targets. |
+| 10 | **Neural Quality (MERT)** | 0.05 | Uses `m-a-p/MERT-v1-95M` learned representations to assess temporal coherence, activation strength, layer agreement, and periodicity. |
+| 11 | **Timbral Naturalness** | 0.05 | Spectral envelope naturalness, harmonic decay characteristics, transient quality, temporal envelope, and spectral flux consistency. |
+| 12 | **Vocal Quality** | 0.04 | Vocal presence, clarity, pitch consistency, and harmonic richness. Genre-aware: returns neutral 0.5 for instrumental genres. When `vocals_requested=True`, vocal scorer weight is boosted 1.5x and vocal_lyrics is boosted 2x. |
+| 13 | **Mix Separation** | 0.04 | Spectral clarity, frequency masking analysis, spatial depth, low-end definition, and mid-range presence. |
+| 14 | **Learned MOS** | 0.03 | Multi-resolution perceptual quality estimation: waveform quality, codec robustness, perceptual loudness, and harmonic richness. |
+| 15 | **Audio Quality** | 0.02 | Signal-level analysis: harmonic ratio, onset quality, spectral contrast, dynamic range, and temporal variation. |
+| 16 | **Speed** | 0.02 | Duration-relative speed scoring (see below). |
+| 17 | **Perceptual Quality** | 0.01 | Bandwidth consistency, signal-to-noise ratio, harmonic noise ratio, and high-frequency presence. |
+| 18 | **Neural Codec** | 0.01 | EnCodec reconstruction quality and naturalness assessment. |
 
-### 3. Neural Quality / MERT (10%)
+### Speed Scoring
 
-Uses MERT (`m-a-p/MERT-v1-95M`) learned music representations to assess temporal coherence, layer agreement, periodicity, and representation norm. Scoring uses a bell-curve distribution around calibrated centers.
+Speed is scored relative to the requested duration, not as an absolute time:
 
-### 4. Production Quality (8%)
+```
+ratio = generation_time / requested_duration
+```
 
-Analyzes spectral balance, LUFS loudness (ITU-R BS.1770-4), and dynamics. Targets are genre-aware.
+| Ratio | Score |
+|-------|-------|
+| <= 1.0 | 1.0 |
+| 3.0 | 0.3 |
+| >= 6.0 | 0.0 |
 
-### 5. Melody Coherence (7%)
+Uses validator-measured `dendrite.process_time`, not miner-reported time. If no validator timing is available, defaults to 0.5.
 
-Evaluates melodic intervals, pitch contour, and melodic structure.
+### 4 Penalty Multipliers
 
-### 6. Structural Completeness (7%)
-
-Performs section detection and song form analysis. Expectations vary by genre.
-
-### 7. Audio Quality (6%)
-
-Signal-level analysis with five sub-metrics: harmonic ratio (25%), onset quality (20%), spectral contrast (20%), dynamic range (15%), and temporal variation (20%). Sub-metric weights are configurable via `TF_QW_*` variables.
-
-### 8. Preference Model (6%)
-
-Perceptual quality scoring. Uses a bootstrap heuristic by default when no trained model is available. When `TF_PREFERENCE_MODEL_PATH` is set, loads a trained `PreferenceHead` that scores MERT embeddings.
-
-### 9. Vocal Quality (6%)
-
-Assesses vocal presence, clarity, and pitch accuracy. Genre-aware: vocals are expected in pop and rock but not in ambient or electronic genres.
-
-### 10. Diversity (5%)
-
-Tracks CLAP embeddings of each miner's outputs over time. Miners that recycle similar outputs receive low diversity scores. Computed per-batch across all responses.
-
-### 11. Speed (5%)
-
-Rewards fast generation. Scoring curve:
-
-- 5 seconds or less: 1.0
-- 30 seconds: 0.3
-- 60 seconds or more: 0.0
-
-Uses validator-measured round-trip time (`dendrite.process_time`), not miner-reported time. If no validator timing is available, defaults to 0.5.
-
-### 12. Attribute Verification (0% by default)
-
-Can verify specific musical attributes. Weight is 0 by default; opt in by raising `TF_WEIGHT_ATTRIBUTE`.
-
-### Penalty System
-
-Penalties are applied after dimension scoring. Hard-zero penalties override the final score entirely.
+These are applied multiplicatively to the composite score after dimension scoring.
 
 | Penalty | Trigger | Effect |
 |---------|---------|--------|
-| Silence | Audio RMS below 0.01 | Hard zero -- final score = 0.0 |
-| Timeout | Generation exceeds 120s | Hard zero -- final score = 0.0 |
-| Plagiarism | Self-similarity above 0.80 | Hard zero -- final score = 0.0 |
-| Duration | Off-target by more than 20% | Linear penalty from 1.0 to 0.0 at 50% deviation |
-| Artifacts | Spectral discontinuities, clipping, loops | Multiplier on final score |
+| **Duration** | Requested vs. actual duration mismatch | Within 20% tolerance: no penalty. Linear decay from 1.0 to 0.0 between 20% and 50% deviation. Beyond 50%: multiplier = 0.0. |
+| **Artifact** | Clipping, loops, spectral discontinuities, spectral holes | Multiplier on final score based on artifact severity. |
+| **FAD** | Per-miner Frechet Audio Distance | Sigmoid curve with midpoint=15, steepness=2, floor=0.5. Reference stats loaded from `TF_FAD_REFERENCE_STATS_PATH`. |
+| **Soft Plagiarism** | Cosine similarity in [0.65, 0.72] zone | Multiplier decays from 1.0 to 0.05 within the soft zone. |
 
-### Weight Perturbation (Anti-Gaming)
+### Hard-Zero Conditions
 
-Each round, every scoring dimension weight receives a deterministic perturbation of up to plus or minus 20%, seeded by the `challenge_id`. All weights are perturbed individually, then renormalized to sum to 1.0. This prevents miners from optimizing for a fixed weight distribution.
+These override the final score to 0.0 regardless of dimension scores:
 
-Set `TF_WEIGHT_PERTURBATION=0.0` to disable perturbation.
+| Condition | Trigger |
+|-----------|---------|
+| **Silence** | Audio RMS below 0.01 |
+| **Timeout** | Round-trip time exceeds 300 seconds |
+| **Hard Self-Plagiarism** | Self-similarity above 0.72 (CLAP cosine) |
+| **Hard Cross-Miner Plagiarism** | Cross-miner similarity above 0.70 |
+| **Canonical-Form Plagiarism** | Audio is normalized to pitch C and tempo 120 BPM before embedding comparison, preventing trivial transposition/tempo-shift evasion |
+
+### Anti-Gaming Measures
+
+**Weight Perturbation:** Each round, every non-zero scoring dimension weight receives a deterministic perturbation of up to +/-30%. The seed is computed as `SHA256(challenge_id + TF_VALIDATOR_PERTURBATION_SECRET)`. The secret is a private nonce that is never transmitted to miners. Without the secret, miners cannot reconstruct the perturbed weights from the open-source code. All weights are perturbed individually, then renormalized to sum to 1.0.
+
+**Scorer Dropout:** Each round, 10% of non-zero scorers are randomly dropped (their weight redistributed). This adds further unpredictability to the scoring pipeline.
+
+**Hardcoded Weights:** All scoring weights and thresholds are hardcoded in the source code, not configurable via environment variables. This ensures consensus across all validators.
+
+### Multi-Scale Evaluation
+
+Scorer weights are adjusted based on the requested audio duration:
+
+**Short (<10s):** Production, quality, timbral, mix separation, and learned MOS weights are increased. Structural, musicality, and melody weights are decreased. Short clips are judged primarily on sonic quality.
+
+**Medium (10--30s):** Baseline multipliers (all 1.0). No adjustment.
+
+**Long (>=30s):** Structural weight is boosted to 1.8x, melody to 1.5x, musicality to 1.3x. Speed weight is reduced to 0.5x, production to 0.8x. Long-form bonuses are available:
+- `phrase_coherence_bonus`: up to +0.05 added directly to the composite score
+- `compositional_arc_bonus`: up to +0.05 added directly to the composite score
+
+### Genre-Aware Scoring
+
+The scoring system recognizes 9 genre families: electronic, rock, classical-cinematic, ambient, hip-hop, jazz-blues, folk-acoustic, groove-soul, and pop. Each family defines per-genre targets for:
+
+- Dynamic range
+- Onset density
+- Rhythmic groove
+- Spectral balance
+- Loudness
+- Other style-specific attributes
+
+Vocal scorers return a neutral 0.5 for instrumental genres by default. When `vocals_requested=True` is set in the challenge synapse, vocal_lyrics weight is boosted 2x and vocal weight is boosted 1.5x.
+
+### Conditional Targets and Progressive Difficulty
+
+**ConditionalTargetDeriver:** Extracts quality targets from the prompt text via keyword matching, setting genre-specific expectations for each scorer.
+
+**ProgressiveDifficultyManager:** Tracks the network's overall quality via an EMA and scales challenge difficulty accordingly. As the network improves, challenges become harder.
+
+---
+
+## Challenge Protocol
+
+The challenge synapse includes the following fields:
+
+- **prompt**: Text description of the music to generate
+- **duration**: Requested duration in seconds (1--180)
+- **vocals_requested**: Boolean indicating whether vocals are expected
+- **lyrics**: Optional lyrics text when vocals are requested
+- **genre**, **mood**, **tempo**, **key_signature**, **instruments**: Musical parameters
+- **creative_constraints**: Additional structural or sonic requirements
+
+Challenges are assembled from a large combinatorial space:
+
+- 40 genres
+- 35+ moods
+- 24 key signatures
+- 6 time signatures
+- Genre-specific instrument pools and tempo ranges
+- Duration range: 1--180 seconds
+- 15 prompt templates with varied structural ordering
+- 4 creative constraint pools (emotional arcs, structural requirements, sonic textures, dynamic instructions), each with 10 options
+
+This yields over 100,000 unique combinations per challenge, making it infeasible for miners to memorize or cache responses.
 
 ---
 
@@ -280,29 +330,41 @@ Each miner's score is smoothed over time using an EMA:
 ema_new = alpha * raw_score + (1 - alpha) * ema_old
 ```
 
-where `alpha = 0.2` by default (`TF_EMA_ALPHA`). The first score for a miner initializes the EMA directly. Higher alpha values make the EMA more responsive to recent rounds.
+Key parameters (hardcoded):
 
-New miners start with EMA = 0.0 and ramp up gradually. A miner consistently scoring 0.7 takes ~8 rounds to cross the baseline.
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| EMA_ALPHA | 0.2 | Smoothing factor. Higher = more responsive to recent rounds. |
+| EMA_NEW_MINER_SEED | 0.25 | New miners start at 0.25, not 0.0, giving them a fair ramp-up period. |
+
+EMA state is persisted to disk at the path specified by `TF_EMA_STATE_PATH` (default: `./ema_state.json`), saved every 5 blocks (`TF_EMA_SAVE_INTERVAL`). This means validator restarts do not lose EMA history.
 
 ### Steepening Function
 
-The steepening function converts EMA scores into weights, amplifying top performers and zeroing out underperformers.
+The steepening function converts EMA scores into weights, amplifying top performers and suppressing underperformers. It uses a soft sigmoid floor (not a hard cliff).
 
-- Miners with EMA at or below the baseline (0.50) receive weight = 0.
-- Above the baseline:
+Key parameters (hardcoded):
+
+| Parameter | Value |
+|-----------|-------|
+| STEEPEN_BASELINE | 0.45 |
+| STEEPEN_POWER | 2.0 |
+
+Miners with EMA at or below the baseline (0.45) receive near-zero weight. Above the baseline:
 
 ```
 weight = ((ema - baseline) / (1 - baseline)) ^ power
 ```
 
-With default settings (`baseline = 0.50`, `power = 2.0`):
+Example calculations with baseline = 0.45, power = 2.0:
 
 | EMA Score | Calculation | Weight |
 |-----------|-------------|--------|
-| 0.50 | 0.0 | 0.000 |
-| 0.60 | ((0.60 - 0.50) / 0.50)^2 = 0.20^2 | 0.040 |
-| 0.70 | ((0.70 - 0.50) / 0.50)^2 = 0.40^2 | 0.160 |
-| 0.90 | ((0.90 - 0.50) / 0.50)^2 = 0.80^2 | 0.640 |
+| 0.45 | 0.0 | 0.000 |
+| 0.55 | ((0.55 - 0.45) / 0.55)^2 = 0.182^2 | 0.033 |
+| 0.65 | ((0.65 - 0.45) / 0.55)^2 = 0.364^2 | 0.132 |
+| 0.80 | ((0.80 - 0.45) / 0.55)^2 = 0.636^2 | 0.405 |
+| 0.95 | ((0.95 - 0.45) / 0.55)^2 = 0.909^2 | 0.826 |
 
 Only consistently high-quality miners earn meaningful rewards.
 
@@ -317,36 +379,22 @@ Only consistently high-quality miners earn meaningful rewards.
 
 ## Organic Generation
 
-Organic requests from the SaaS backend are handled directly by the validator via its built-in HTTP API (port 8090 by default). The flow:
+Organic requests from the SaaS backend are handled directly by the validator via its built-in HTTP API (port 8090 by default, controlled by `TF_ORGANIC_API_PORT`). Disable with `TF_ORGANIC_API_ENABLED=false`.
+
+The flow:
 
 1. SaaS backend sends a POST to the validator's `/organic/generate` endpoint.
-2. Validator selects the top 10 miners by EMA (best proven quality).
-3. Fan-out: the prompt is sent to all 10 miners with a 30-second timeout.
-4. All valid responses are scored with the same 11-signal pipeline used for challenges.
+2. Validator selects the top miners by EMA using a composite miner selection strategy.
+3. Fan-out: the prompt is sent to K=3 miners concurrently.
+4. All valid responses pass through a quality gate using the same 18-scorer pipeline used for challenges.
 5. Scores update the EMA leaderboard (organic and challenge scores share the same EMA).
-6. The top N results (by composite score) are returned to the SaaS backend.
+6. The best result (by composite score) is returned to the SaaS backend.
 
 Key design properties:
-- **Low latency**: top-K selection (10 miners) + 30s timeout keeps response time ~20-25s.
+
+- **Low latency**: top-K fan-out with quality gating keeps response time manageable.
 - **Coexistence**: organic requests run concurrently with challenge rounds on the same async event loop. Scoring models are protected by an asyncio lock, and CPU-bound scoring runs in a thread pool executor.
 - **Fair EMA**: organic scores feed the same EMA as challenges. Poor performance on organic requests lowers a miner's EMA just like a bad challenge round.
-
----
-
-## Challenge Generation
-
-Challenges are assembled from a large combinatorial space:
-
-- 40 genres
-- 35+ moods
-- 24 key signatures
-- 6 time signatures
-- Genre-specific instrument pools and tempo ranges
-- 8 duration options (5--30 seconds)
-- 15 prompt templates with varied structural ordering
-- 4 creative constraint pools (emotional arcs, structural requirements, sonic textures, dynamic instructions), each with 10 options
-
-This yields over 100,000 unique combinations per challenge, making it infeasible for miners to memorize or cache responses.
 
 ---
 
@@ -354,9 +402,10 @@ This yields over 100,000 unique combinations per challenge, making it infeasible
 
 The preference model adds a human-aligned quality signal to the scoring pipeline.
 
-- **Bootstrap mode** (default): a heuristic scorer runs when no trained model is available.
-- **Trained mode**: when `TF_PREFERENCE_MODEL_PATH` is set, the validator loads a trained `PreferenceHead` that scores MERT embeddings.
-- **Training pipeline**: `tools/export_and_train.py` exports human annotations, computes CLAP embeddings, and trains the preference head.
+- **Bootstrap mode** (default): returns a neutral 0.5 score. The preference weight is effectively 0% in bootstrap mode.
+- **Trained mode**: when `TF_PREFERENCE_MODEL_PATH` is set, the validator loads a `PreferenceHead` (512-dim CLAP input) or `DualPreferenceHead` (1280-dim CLAP+MERT input). Training uses Bradley-Terry pairwise loss.
+- **Auto-scaling**: `PreferenceWeightScaler` adjusts the preference scorer weight between 2% and 20% based on model accuracy (accuracy range 0.55--0.80). Low accuracy = low weight.
+- **Training pipeline**: `tools/export_and_train.py` exports human annotations from the crowd annotation system, computes embeddings, and trains the preference head.
 - **Auto-update**: the validator checks the platform API endpoint `/api/v1/annotations/model/latest` every hour. If the SHA256 of the latest model differs from the current one, it downloads and loads the new model automatically.
 
 ---
@@ -367,6 +416,7 @@ The preference model adds a human-aligned quality signal to the scoring pipeline
 - **Leaderboard summary** is logged each round: total miners scored, number above baseline, EMA mean and max.
 - **Per-miner detail** is logged each round: raw reward, current EMA, and computed weight.
 - **Leaderboard snapshot** is saved to `storage/leaderboard.json` after each round.
+- **Weights & Biases**: enable with `TF_WANDB_ENABLED=true` for real-time dashboards of scoring metrics, EMA progression, and weight distributions.
 
 ---
 
@@ -374,11 +424,11 @@ The preference model adds a human-aligned quality signal to the scoring pipeline
 
 ### No miners responding
 
-Check that the metagraph is syncing correctly, miners are registered on the subnet, and miners are actively serving on their advertised endpoints.
+Check that the metagraph is syncing correctly (`TF_METAGRAPH_SYNC_INTERVAL`), miners are registered on the subnet, and miners are actively serving on their advertised endpoints.
 
 ### All scores are zero
 
-Verify that audio decoding is working (ffmpeg and libsndfile installed) and that the scoring models (CLAP, MERT) downloaded successfully. Check logs for model loading errors.
+Verify that audio decoding is working (ffmpeg and libsndfile installed) and that the scoring models (CLAP, MERT, Whisper) downloaded successfully. Check logs for model loading errors. Also check that miners are not timing out (300s limit).
 
 ### Weight setting fails
 
@@ -386,8 +436,16 @@ Confirm that the validator hotkey has sufficient stake for a validator permit, t
 
 ### High scoring latency
 
-If scoring is slow, use a GPU for CLAP and MERT inference. Ensure `CUDA_VISIBLE_DEVICES` is not set to `-1` in your environment. The `ecosystem.config.js` default disables GPU; remove that setting for GPU-accelerated scoring.
+If scoring is slow, use a GPU for CLAP, MERT, and Whisper inference. Ensure `CUDA_VISIBLE_DEVICES` is not set to `-1` in your environment. The `ecosystem.config.js` default disables GPU; remove that setting for GPU-accelerated scoring.
+
+### EMA state lost after restart
+
+Ensure `TF_EMA_STATE_PATH` points to a persistent location (not a tmpfs). The default `./ema_state.json` saves to the working directory. EMA is saved every 5 blocks by default.
 
 ### Preference model download fails
 
-Check that `TF_VALIDATOR_API_URL` is set correctly and the platform API is reachable. Verify that `TF_VALIDATOR_API_TOKEN` is valid. The validator will continue operating with the bootstrap heuristic if the download fails.
+Check that `TF_VALIDATOR_API_URL` is set correctly and the platform API is reachable. Verify that `TF_VALIDATOR_API_TOKEN` is valid. The validator will continue operating in bootstrap mode (neutral 0.5, effective weight 0%) if the download fails.
+
+### FAD penalty too aggressive
+
+Ensure `TF_FAD_REFERENCE_STATS_PATH` points to a valid reference statistics file (`./reference_fad_stats.npz` by default). If the file is missing, the FAD penalty may not function correctly. The FAD penalty has a floor of 0.5, so it cannot reduce scores below half.

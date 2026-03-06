@@ -61,6 +61,7 @@ class VocalLyricsScorer:
         sr: int,
         genre: str = "",
         expected_lyrics: str = "",
+        vocals_requested: bool = False,
     ) -> dict[str, float]:
         """
         Compute per-metric vocal/lyrics quality scores.
@@ -70,6 +71,7 @@ class VocalLyricsScorer:
             sr: Sample rate in Hz.
             genre: Optional genre string for genre-aware scoring.
             expected_lyrics: Optional reference lyrics for WER evaluation.
+            vocals_requested: If True, always evaluate vocals regardless of genre.
 
         Returns:
             Dict with keys matching ``VOCAL_LYRICS_WEIGHTS``.
@@ -85,7 +87,8 @@ class VocalLyricsScorer:
             profile = get_genre_profile(genre) if genre else GenreProfile(family="default")
 
             # --- Genre gate: instrumental genres get neutral scores ---
-            if not profile.vocal_expected:
+            # Overridden when the prompt explicitly requests vocals.
+            if not profile.vocal_expected and not vocals_requested:
                 return dict(_NEUTRAL)
 
             # --- Edge-case guards ---

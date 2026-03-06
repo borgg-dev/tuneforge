@@ -176,11 +176,11 @@ Every validation round, miners are scored across **18 weighted signals** grouped
 | **Timbral Naturalness** | 5% | Naturalness & Mix |
 | **Mix Separation** | 4% | Naturalness & Mix |
 | **Learned MOS** | 3% | Naturalness & Mix |
-| **Preference Model** | 7% | Production & Fidelity |
 | **Neural Quality (MERT)** | 5% | Production & Fidelity |
 | **Production Quality** | 5% | Production & Fidelity |
 | **Vocal Quality** | 4% | Production & Fidelity |
 | **Audio Quality** | 2% | Production & Fidelity |
+| **Preference Model** | 7% base (0% bootstrap, 2-20% trained) | Learned Preference |
 | **Perceptual Quality** | 1% | Perceptual |
 | **Neural Codec Quality** | 1% | Perceptual |
 | **Diversity** | 8% | Other |
@@ -190,7 +190,7 @@ Every validation round, miners are scored across **18 weighted signals** grouped
 
 **Neural Quality** uses the MERT model (`m-a-p/MERT-v1-95M`) to evaluate temporal coherence, activation strength, layer agreement, and structural periodicity. **Musicality** analyzes pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement sophistication. **Production Quality** checks spectral balance, frequency fullness, loudness consistency, dynamic expressiveness, and stereo quality.
 
-**Vocal & Lyrics** uses Whisper-based lyrics intelligibility scoring alongside vocal clarity, pitch quality, and expressiveness. **Timbral Naturalness** evaluates spectral envelope naturalness, harmonic decay, and transient quality. **Mix Separation** measures spectral clarity, frequency masking, spatial depth, and low-end/mid-range definition. **Learned MOS** provides multi-resolution perceptual quality estimation.
+**Vocal & Lyrics** uses Whisper-based lyrics intelligibility scoring alongside vocal clarity, pitch quality, and expressiveness. **Vocal Quality** evaluates vocal presence, clarity, pitch consistency, and harmonic richness. Both vocal scorers are **genre-aware**: instrumental genres (ambient, electronic, classical-cinematic) receive neutral 0.5 scores so that vocal absence doesn't penalize genuinely instrumental music. When the prompt explicitly requests vocals (`vocals_requested=True`), the genre gate is overridden and both vocal scorers evaluate the audio normally -- their weights are also boosted (2x for vocal/lyrics, 1.5x for vocal quality) and renormalized. **Timbral Naturalness** evaluates spectral envelope naturalness, harmonic decay, and transient quality. **Mix Separation** measures spectral clarity, frequency masking, spatial depth, and low-end/mid-range definition. **Learned MOS** provides multi-resolution perceptual quality estimation.
 
 **Attribute Verification** checks prompt compliance (tempo, key, instruments) using librosa analysis and CLAP zero-shot classification. **Diversity** tracks CLAP embedding variety across a miner's recent 50 submissions with a population-level diversity bonus. **Speed** uses a duration-relative curve (see below).
 
@@ -376,98 +376,23 @@ All configuration is done through environment variables with the `TF_` prefix. V
 | `TF_CHALLENGE_BATCH_SIZE` | int | 8 | Miners per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | 4 | Max concurrent scoring tasks |
 
-### Scoring Weights
+### Consensus-Critical Constants (Hardcoded)
 
-All weights must sum to 1.0. Each scorer has a corresponding `TF_WEIGHT_<NAME>` env var:
+All scoring weights, thresholds, EMA parameters, and penalty curves are **hardcoded** in `tuneforge/config/scoring_config.py`. They are not configurable via environment variables. All validators must use identical values to maintain Bittensor consensus. Changing these values will cause your validator to diverge from network consensus.
 
-| Variable | Default |
-|----------|---------|
-| `TF_WEIGHT_CLAP` | 0.15 |
-| `TF_WEIGHT_ATTRIBUTE` | 0.09 |
-| `TF_WEIGHT_MUSICALITY` | 0.09 |
-| `TF_WEIGHT_VOCAL_LYRICS` | 0.08 |
-| `TF_WEIGHT_DIVERSITY` | 0.08 |
-| `TF_WEIGHT_PREFERENCE` | 0.07 |
-| `TF_WEIGHT_MELODY` | 0.06 |
-| `TF_WEIGHT_STRUCTURAL` | 0.06 |
-| `TF_WEIGHT_PRODUCTION` | 0.05 |
-| `TF_WEIGHT_NEURAL_QUALITY` | 0.05 |
-| `TF_WEIGHT_TIMBRAL` | 0.05 |
-| `TF_WEIGHT_VOCAL` | 0.04 |
-| `TF_WEIGHT_MIX_SEPARATION` | 0.04 |
-| `TF_WEIGHT_LEARNED_MOS` | 0.03 |
-| `TF_WEIGHT_QUALITY` | 0.02 |
-| `TF_WEIGHT_SPEED` | 0.02 |
-| `TF_WEIGHT_PERCEPTUAL` | 0.01 |
-| `TF_WEIGHT_NEURAL_CODEC` | 0.01 |
+See the [Scoring Signals](#scoring-signals) table for the full weight distribution, and the [Penalties](#penalties), [EMA Leaderboard](#ema-leaderboard), and [Anti-Gaming](#anti-gaming) sections for threshold details.
 
-### Scoring Thresholds
+### Operational Parameters (Configurable)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_SELF_PLAGIARISM_THRESHOLD` | float | 0.72 | Hard plagiarism threshold (self) |
-| `TF_SOFT_PLAGIARISM_THRESHOLD` | float | 0.65 | Soft penalty zone start |
-| `TF_CROSS_MINER_PLAGIARISM_THRESHOLD` | float | 0.70 | Hard plagiarism threshold (cross-miner) |
-| `TF_SILENCE_THRESHOLD` | float | 0.01 | RMS silence threshold |
-| `TF_DURATION_TOLERANCE` | float | 0.20 | Duration deviation with no penalty |
-| `TF_DURATION_TOLERANCE_MAX` | float | 0.50 | Duration deviation for score 0 |
-| `TF_WEIGHT_PERTURBATION` | float | 0.30 | Per-round weight perturbation range |
-| `TF_SCORER_DROPOUT_RATE` | float | 0.10 | Per-scorer dropout probability |
-| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto | Private nonce for perturbation seed |
-
-### EMA / Leaderboard
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_EMA_ALPHA` | float | 0.2 | EMA smoothing factor |
-| `TF_EMA_NEW_MINER_SEED` | float | 0.25 | Initial EMA for new miners |
-| `TF_STEEPEN_BASELINE` | float | 0.45 | Min EMA for nonzero weight |
-| `TF_STEEPEN_POWER` | float | 2.0 | Steepening exponent |
+| `TF_VALIDATION_INTERVAL` | int | 300 | Seconds between rounds |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | 115 | Blocks between weight sets |
-
-### FAD (Frechet Audio Distance)
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_FAD_REFERENCE_STATS_PATH` | str | ./reference_fad_stats.npz | Reference statistics file |
-| `TF_FAD_WINDOW_SIZE` | int | 50 | Embeddings per miner for FAD |
-| `TF_FAD_PENALTY_MIDPOINT` | float | 15.0 | FAD value at 50% penalty |
-| `TF_FAD_PENALTY_STEEPNESS` | float | 2.0 | Sigmoid steepness |
-| `TF_FAD_PENALTY_FLOOR` | float | 0.5 | Minimum penalty multiplier |
-
-### Duration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_DEFAULT_DURATION` | float | 10.0 | Default challenge duration (s) |
-| `TF_MAX_DURATION` | float | 180.0 | Maximum duration (s) |
-| `TF_MIN_DURATION` | float | 1.0 | Minimum duration (s) |
-
-### CLAP Model
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_CLAP_MODEL` | str | laion/larger_clap_music | CLAP model for scoring |
-| `TF_CLAP_SAMPLE_RATE` | int | 48000 | CLAP sample rate |
-| `TF_CLAP_SIM_FLOOR` | float | 0.15 | Min cosine similarity (maps to 0) |
-| `TF_CLAP_SIM_CEILING` | float | 0.75 | Max cosine similarity (maps to 1) |
-
-### MERT Model
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_MERT_MODEL` | str | m-a-p/MERT-v1-95M | MERT model |
-| `TF_MERT_SAMPLE_RATE` | int | 24000 | MERT sample rate |
-
-### Preference Model
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_PREFERENCE_MODEL_PATH` | str | None | Trained preference model path |
-| `TF_PREFERENCE_WEIGHT_MIN` | float | 0.02 | Min auto-scaled weight |
-| `TF_PREFERENCE_WEIGHT_MAX` | float | 0.20 | Max auto-scaled weight |
-| `TF_PREFERENCE_ACCURACY_MIN` | float | 0.55 | Accuracy for min weight |
-| `TF_PREFERENCE_ACCURACY_MAX` | float | 0.80 | Accuracy for max weight |
+| `TF_EMA_STATE_PATH` | str | ./ema_state.json | EMA persistence file path |
+| `TF_EMA_SAVE_INTERVAL` | int | 5 | Blocks between EMA saves |
+| `TF_FAD_REFERENCE_STATS_PATH` | str | ./reference_fad_stats.npz | FAD reference statistics file |
+| `TF_PREFERENCE_MODEL_PATH` | str | None | Trained preference model checkpoint |
+| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto | Private nonce for perturbation seed |
 
 ### API / Server
 

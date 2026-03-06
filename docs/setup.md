@@ -26,7 +26,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 
 ## Architecture Overview
 
-TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 11 dimensions, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
+TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 18 dimensions with 4 penalty multipliers, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
 
 ```mermaid
 flowchart TB
@@ -86,7 +86,7 @@ sequenceDiagram
     participant WS as WeightSetter
     participant C as Chain
 
-    PG->>V: Create challenge (genre, mood, tempo, instruments, key, time sig, creative constraint, duration)
+    PG->>V: Create challenge (genre, mood, tempo, instruments, key, time sig, lyrics, vocals_requested, duration 1-180s)
     V->>V: Build MusicGenerationSynapse with challenge params
     V->>V: Select batch of miner UIDs (TF_CHALLENGE_BATCH_SIZE=8)
     V->>D: Send synapse to miner axons (timeout 120s)
@@ -94,9 +94,9 @@ sequenceDiagram
     M->>D: Return base64 WAV in synapse
     D->>V: Collect responses
     V->>RM: score_batch(responses)
-    Note over RM: Decode audio, check hard penalties,<br/>compute 11 signals, apply penalties,<br/>weighted composite
+    Note over RM: Decode audio, check hard penalties,<br/>compute 18 signals + 4 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
     RM->>LB: update(scores)
-    Note over LB: Apply EMA smoothing
+    Note over LB: Apply EMA smoothing (alpha=0.2)
     LB->>LB: Save snapshot to storage/leaderboard.json
     WS->>C: set_weights() every 115 blocks
     V-->>V: Optionally push round data to platform API
@@ -104,7 +104,7 @@ sequenceDiagram
 
 Step-by-step:
 
-1. **PromptGenerator** creates a challenge with genre, mood, tempo, instruments, key signature, time signature, creative constraint, and duration.
+1. **PromptGenerator** creates a challenge with genre, mood, tempo, instruments, key signature, time signature, lyrics, vocals_requested, creative constraint, and duration (1--180 seconds).
 2. Validator constructs a `MusicGenerationSynapse` populated with the challenge parameters.
 3. Validator selects a batch of miner UIDs (`TF_CHALLENGE_BATCH_SIZE`, default 8).
 4. Dendrite sends the synapse to miner axons with a timeout of 120 seconds.
@@ -122,14 +122,14 @@ Step-by-step:
 Organic requests from the SaaS backend flow through the validator's built-in HTTP API (port 8090):
 
 ```
-SaaS Backend → POST /organic/generate → Validator
-Validator → fan-out to top 10 miners by EMA (30s timeout)
-Validator → score all responses (same 11-signal pipeline)
-Validator → update EMA leaderboard
-Validator → return top N results to SaaS Backend
+SaaS Backend -> POST /organic/generate -> Validator
+Validator -> fan-out to top 10 miners by EMA (30s timeout)
+Validator -> score all responses (same 18-signal pipeline)
+Validator -> update EMA leaderboard
+Validator -> return top N results to SaaS Backend
 ```
 
-The validator runs the organic API server and the challenge validation loop concurrently on the same asyncio event loop. Scoring models are protected by a lock, and CPU-bound scoring runs in a thread pool executor so organic requests aren't blocked by challenge rounds.
+The validator runs the organic API server and the challenge validation loop concurrently on the same asyncio event loop. Scoring models are protected by a lock, and CPU-bound scoring runs in a thread pool executor so organic requests are not blocked by challenge rounds.
 
 ---
 
@@ -141,14 +141,19 @@ Each miner response passes through the full scoring pipeline within `ProductionR
 flowchart LR
     A[Decode Audio] --> B{Hard Penalties}
     B -->|Silence RMS < 0.01| Z[Score = 0]
-    B -->|Timeout > 120s| Z
-    B -->|Plagiarism > 0.80| Z
-    B -->|Pass| C[11 Component Scores]
-    C --> D[Per-Round Weight Perturbation +/-20%]
-    D --> E[Weighted Composite]
-    E --> F[Duration Penalty Multiplier]
-    F --> G[Artifact Penalty Multiplier]
-    G --> H[Final Score 0 to 1]
+    B -->|Timeout > 300s| Z
+    B -->|Self-plagiarism > 0.72| Z
+    B -->|Cross-miner > 0.70| Z
+    B -->|Pass| C[18 Component Scores]
+    C --> D[Multi-Scale Duration Adjustment]
+    D --> E[Per-Round Weight Perturbation +/-30%]
+    E --> F[Scorer Dropout 10%]
+    F --> G[Weighted Composite]
+    G --> H[Duration Penalty Multiplier]
+    H --> I[Artifact Penalty Multiplier]
+    I --> J[FAD Penalty Multiplier]
+    J --> K[Soft Plagiarism Penalty]
+    K --> L[Final Score 0 to 1]
 ```
 
 ### Hard Penalties
@@ -158,31 +163,40 @@ Any of the following results in an immediate score of 0:
 | Condition | Threshold |
 |-----------|-----------|
 | Silence | RMS < 0.01 |
-| Timeout | > 120 seconds |
-| Self-plagiarism | Fingerprint similarity > 0.80 |
+| Timeout | > 300 seconds |
+| Self-plagiarism | Fingerprint cosine similarity > 0.72 |
+| Cross-miner plagiarism | Fingerprint cosine similarity > 0.70 |
 
-### Scoring Components
+Plagiarism uses canonical-form comparison: audio is normalized to pitch C and tempo 120 BPM before computing embeddings.
 
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| `clap` | 0.30 | CLAP text-audio cosine similarity (prompt adherence) |
-| `musicality` | 0.10 | Rhythmic and harmonic analysis |
-| `neural_quality` | 0.10 | MERT-based neural audio quality assessment |
-| `production` | 0.08 | Production quality (mixing, mastering characteristics) |
-| `melody` | 0.07 | Melodic coherence and development |
-| `structural` | 0.07 | Structural completeness (intro, development, outro) |
-| `quality` | 0.06 | Classic audio quality sub-metrics |
-| `preference` | 0.06 | Learned preference model (or bootstrap heuristic) |
-| `vocal` | 0.06 | Vocal quality when vocals are present |
-| `diversity` | 0.05 | Output diversity across rounds |
-| `speed` | 0.05 | Generation speed (validator-measured round-trip time) |
-| `attribute` | 0.00 | Attribute verification (reserved, currently disabled) |
+### Scoring Components (18 Scorers)
 
-Weight distribution rationale: prompt adherence (30%), music quality spread across eight independent scorers (60%), and diversity plus speed (10%). Artifact detection is applied as a penalty multiplier, not as a weighted component.
+All weights are **hardcoded** in `scoring_config.py` for validator consensus. They are NOT configurable via environment variables. Weights sum to 1.0.
+
+| Component | Weight | Model / Method | Description |
+|-----------|--------|----------------|-------------|
+| `clap` | 0.15 | `laion/larger_clap_music` | CLAP text-audio cosine similarity (prompt adherence). Raw similarity in [0.15, 0.75] mapped to [0, 1]. |
+| `attribute` | 0.09 | Rule-based | Attribute verification (genre, mood, tempo, key, instruments) |
+| `musicality` | 0.09 | Librosa analysis | Rhythmic and harmonic analysis with one-sided minimum floor |
+| `vocal_lyrics` | 0.08 | Whisper | Lyrics intelligibility, vocal clarity, pitch accuracy |
+| `diversity` | 0.08 | Embedding cache (50 entries) | Output diversity across rounds + population-level diversity bonus |
+| `preference` | 0.07 | PreferenceHead / DualPreferenceHead | Learned preference model. 0% at bootstrap, auto-scales 2--20% based on validation accuracy. Bradley-Terry pairwise loss. |
+| `melody` | 0.06 | Melodic contour analysis | Melodic coherence and development with one-sided minimum floor |
+| `structural` | 0.06 | Section detection | Structural completeness (intro, development, outro) with one-sided minimum floor |
+| `production` | 0.05 | Spectral analysis | Production quality (mixing, mastering characteristics) |
+| `neural_quality` | 0.05 | `m-a-p/MERT-v1-95M` | MERT-based neural audio quality assessment |
+| `timbral` | 0.05 | Spectral envelope analysis | Spectral envelope, harmonic decay, transient analysis |
+| `vocal` | 0.04 | Vocal detection + analysis | Vocal quality when vocals are present |
+| `mix_separation` | 0.04 | Frequency analysis | Spectral clarity, frequency masking, spatial depth |
+| `learned_mos` | 0.03 | Multi-resolution CNN | Multi-resolution perceptual quality estimation |
+| `quality` | 0.02 | Classic DSP metrics | Classic audio quality sub-metrics (see below) |
+| `speed` | 0.02 | `dendrite.process_time` | Duration-relative generation speed (see below) |
+| `perceptual` | 0.01 | Perceptual model | Perceptual audio quality |
+| `neural_codec` | 0.01 | EnCodec | Neural codec reconstruction quality |
 
 ### Audio Quality Sub-Weights
 
-The `quality` component is itself a weighted sum of five sub-metrics:
+The `quality` component is a weighted sum of five sub-metrics (also hardcoded):
 
 | Sub-Metric | Weight |
 |------------|--------|
@@ -192,13 +206,87 @@ The `quality` component is itself a weighted sum of five sub-metrics:
 | Temporal variation | 0.20 |
 | Dynamic range | 0.15 |
 
-### Anti-Gaming: Weight Perturbation
+### Speed Scoring
 
-Each validation round applies a random perturbation of up to +/-20% to the composite weights, seeded deterministically by `challenge_id`. This prevents miners from over-optimizing for a single fixed weight distribution.
+Speed uses a **duration-relative ratio** (generation_time / requested_duration), NOT absolute thresholds:
+
+| Ratio (gen_time / duration) | Score |
+|-----------------------------|-------|
+| <= 1.0 | 1.0 |
+| 3.0 | 0.3 |
+| >= 6.0 | 0.0 |
+
+Speed is measured using the validator-side `dendrite.process_time`, not miner-reported `generation_time_ms`.
+
+### 4 Penalty Multipliers
+
+Penalties are applied multiplicatively to the weighted composite score:
+
+```
+final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+```
+
+| Penalty | Formula |
+|---------|---------|
+| **Duration** | +/-20% tolerance = 1.0, linear decay to 0.0 at +/-50% deviation |
+| **Artifact** | Detects clipping, loops, discontinuities. Multiplier range 0--1. |
+| **FAD** | Sigmoid curve: midpoint=15, steepness=2, floor=0.5 |
+| **Soft plagiarism** | Cosine similarity in [0.65, 0.72]: multiplier decays from 1.0 to 0.05 |
+
+### Anti-Gaming Measures
+
+All scoring parameters are **hardcoded for consensus** -- miners cannot reconstruct exact weights from the open-source code alone.
+
+- **Weight perturbation:** +/-30% per round. Seed = `SHA256(challenge_id + validator_secret)`. The `TF_VALIDATOR_PERTURBATION_SECRET` env var provides a private nonce that is never sent to miners.
+- **Scorer dropout:** 10% of scorers are randomly disabled each round.
+- **No configurable weight env vars:** All weights and thresholds are constants in `scoring_config.py`.
+
+### Multi-Scale Duration Adjustment
+
+Scoring weights are adjusted based on audio duration:
+
+| Duration | Adjustments |
+|----------|-------------|
+| Short (< 10s) | Increased weight for production, quality, timbral |
+| Medium (10--30s) | Baseline weights (no adjustment) |
+| Long (>= 30s) | structural x1.8, melody x1.5, phrase completion bonus +0.05, arc bonus +0.05 |
+
+### Genre Profiles
+
+9 genre families with per-genre weight adjustments. Vocal gate with `vocals_requested` override -- when the synapse requests vocals, vocal-related scorers are activated regardless of genre profile defaults.
 
 ### Leaderboard EMA
 
-Raw round scores are smoothed with exponential moving average (alpha = 0.2). The steepening function applies a power transform (power 2.0) above a baseline of 0.50 to separate high-quality miners from the rest: `((ema - 0.50) / 0.50) ^ 2.0`.
+Raw round scores are smoothed with exponential moving average:
+
+- **Alpha:** 0.2
+- **Seed value:** 0.25
+- **Baseline:** 0.45
+- **Power transform:** 2.0 above baseline with soft sigmoid floor (no hard cliff)
+- **Formula:** `((ema - 0.45) / 0.55) ^ 2.0` with soft sigmoid at the floor
+
+### Preference Model
+
+- `PreferenceHead` (512-dim) or `DualPreferenceHead` (1280-dim)
+- Bradley-Terry pairwise loss for training
+- Auto-scaling: 0% contribution at bootstrap, 2--20% based on validation accuracy
+- Validators auto-download updated models hourly from the platform API
+
+### Constants
+
+| Constant | Value |
+|----------|-------|
+| MAX_DURATION | 180 seconds |
+| CLAP_SIM_CEILING | 0.75 |
+| CLAP_SIM_FLOOR | 0.15 |
+| Self-plagiarism threshold | 0.72 |
+| Cross-miner plagiarism threshold | 0.70 |
+| Soft plagiarism zone | 0.65--0.72 |
+| Silence threshold (RMS) | 0.01 |
+| Timeout | 300 seconds |
+| Diversity history | 50 entries |
+| Perturbation range | +/-30% |
+| Scorer dropout | 10% |
 
 ---
 
@@ -216,13 +304,15 @@ All synapse classes are defined in `tuneforge/base/protocol.py`.
 | `genre` | `str` | `""` | Target genre |
 | `mood` | `str` | `""` | Target mood |
 | `tempo_bpm` | `int` | `120` | Desired BPM (20--300) |
-| `duration_seconds` | `float` | `10.0` | Desired duration in seconds (1--60) |
+| `duration_seconds` | `float` | `10.0` | Desired duration in seconds (1--180) |
 | `key_signature` | `str \| None` | `None` | Musical key signature |
 | `time_signature` | `str \| None` | `None` | Time signature |
 | `instruments` | `list[str] \| None` | `None` | Preferred instruments |
 | `reference_audio` | `str \| None` | `None` | Base64-encoded reference audio |
 | `seed` | `int \| None` | `None` | Random seed for reproducibility |
 | `challenge_id` | `str` | `""` | Unique challenge ID |
+| `lyrics` | `str \| None` | `None` | Lyrics text for vocal generation |
+| `vocals_requested` | `bool` | `False` | Whether vocals are requested |
 | `is_organic` | `bool` | `False` | Organic query vs validator challenge |
 
 **Response fields** (miner to validator):
@@ -309,7 +399,7 @@ Validators collect these metrics to monitor miner health and reliability.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-org/tuneforge.git
+git clone https://github.com/tuneforge-ai/tuneforge.git
 cd tuneforge
 ```
 
@@ -370,6 +460,7 @@ All environment variables use the `TF_` prefix. See the [Environment Variable Re
 | Miner axon port | Configurable (`TF_AXON_PORT`), example: 8091 | Same |
 | Validator axon port | Example: 8092 | Same |
 | API server port | 8000 (`TF_API_PORT`) | Same |
+| Organic API port | 8090 (`TF_ORGANIC_API_PORT`) | Same |
 | Subtensor endpoint | Configurable via `TF_SUBTENSOR_CHAIN_ENDPOINT` | Same |
 
 ---
@@ -461,7 +552,11 @@ pm2 delete all
 
 ## Environment Variable Reference
 
-All variables use the `TF_` prefix and are loaded via `pydantic-settings` (for `settings.py`) or `os.environ` (for `scoring_config.py`).
+All variables use the `TF_` prefix and are loaded via `pydantic-settings`.
+
+**Important:** All scoring weights, thresholds, penalty parameters, EMA constants, speed curves, plagiarism thresholds, and CLAP/MERT model parameters are **hardcoded constants** in `tuneforge/config/scoring_config.py`. They are NOT configurable via environment variables. This is by design -- all validators must use identical scoring parameters for consensus. See the [Scoring Pipeline](#scoring-pipeline) section for the full list of hardcoded values.
+
+The environment variables below control only **operational** parameters.
 
 ### Network
 
@@ -499,7 +594,7 @@ All variables use the `TF_` prefix and are loaded via `pydantic-settings` (for `
 | `TF_MODEL_NAME` | str | `facebook/musicgen-medium` | MusicGen model name or path |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum generation duration (seconds) |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
-| `TF_GENERATION_TIMEOUT` | int | `120` | Timeout for generation requests (seconds) |
+| `TF_GENERATION_TIMEOUT` | int | `120` | Miner-side timeout for generation requests (seconds) |
 | `TF_GPU_DEVICE` | str | `cuda:0` | GPU device for model inference |
 | `TF_MODEL_PRECISION` | str | `float16` | Model precision: float32, float16, bfloat16 |
 | `TF_GUIDANCE_SCALE` | float | `3.0` | Classifier-free guidance scale |
@@ -515,110 +610,17 @@ All variables use the `TF_` prefix and are loaded via `pydantic-settings` (for `
 | `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Miners challenged per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
 
-### Scoring Weights
-
-All weights must sum to 1.0. Override any individual weight via its environment variable.
-
-| Variable | Default | Component |
-|----------|---------|-----------|
-| `TF_WEIGHT_CLAP` | `0.30` | CLAP prompt adherence |
-| `TF_WEIGHT_QUALITY` | `0.06` | Classic audio quality |
-| `TF_WEIGHT_MUSICALITY` | `0.10` | Musicality analysis |
-| `TF_WEIGHT_PRODUCTION` | `0.08` | Production quality |
-| `TF_WEIGHT_MELODY` | `0.07` | Melody coherence |
-| `TF_WEIGHT_NEURAL_QUALITY` | `0.10` | MERT neural quality |
-| `TF_WEIGHT_PREFERENCE` | `0.06` | Preference model |
-| `TF_WEIGHT_STRUCTURAL` | `0.07` | Structural completeness |
-| `TF_WEIGHT_VOCAL` | `0.06` | Vocal quality |
-| `TF_WEIGHT_DIVERSITY` | `0.05` | Output diversity |
-| `TF_WEIGHT_SPEED` | `0.05` | Generation speed |
-| `TF_WEIGHT_ATTRIBUTE` | `0.00` | Attribute verification (reserved) |
-
-### Audio Quality Sub-Weights
-
-Must sum to 1.0. These control the internal breakdown of the `quality` component.
-
-| Variable | Default | Sub-Metric |
-|----------|---------|------------|
-| `TF_QW_HARMONIC_RATIO` | `0.25` | Harmonic ratio |
-| `TF_QW_ONSET_QUALITY` | `0.20` | Onset quality |
-| `TF_QW_SPECTRAL_CONTRAST` | `0.20` | Spectral contrast |
-| `TF_QW_DYNAMIC_RANGE` | `0.15` | Dynamic range |
-| `TF_QW_TEMPORAL_VARIATION` | `0.20` | Temporal variation |
-
-### Scoring Thresholds
+### Operational (Validator)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_SELF_PLAGIARISM_THRESHOLD` | float | `0.80` | Fingerprint similarity above which a response is plagiarized |
-| `TF_SILENCE_THRESHOLD` | float | `0.01` | RMS below which audio is considered silent |
-| `TF_DURATION_TOLERANCE` | float | `0.20` | Acceptable duration deviation (fraction) |
-| `TF_DURATION_TOLERANCE_MAX` | float | `0.50` | Maximum duration deviation before zero score |
-| `TF_WEIGHT_PERTURBATION` | float | `0.20` | Per-round weight perturbation range (+/-), 0 to disable |
-
-### EMA / Leaderboard
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_EMA_ALPHA` | float | `0.2` | EMA smoothing factor (higher = faster adaptation) |
-| `TF_EMA_WARMUP` | int | `9` | Warmup rounds (kept for reference, no longer used as a gate) |
-| `TF_STEEPEN_BASELINE` | float | `0.50` | Score baseline for steepening function |
-| `TF_STEEPEN_POWER` | float | `2.0` | Exponent for steepening above baseline |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between on-chain weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
-
-### Speed Scoring
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_SPEED_BEST_SECONDS` | float | `5.0` | Generation time for maximum speed score |
-| `TF_SPEED_MID_SECONDS` | float | `30.0` | Generation time for mid-range score |
-| `TF_SPEED_MID_SCORE` | float | `0.3` | Score at mid-range generation time |
-| `TF_SPEED_MAX_SECONDS` | float | `60.0` | Generation time at which speed score is 0 |
-
-### Duration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_DEFAULT_DURATION` | float | `10.0` | Default generation duration in seconds |
-| `TF_MAX_DURATION` | float | `60.0` | Maximum allowed duration |
-| `TF_MIN_DURATION` | float | `1.0` | Minimum allowed duration |
-| `TF_DEFAULT_GUIDANCE_SCALE` | float | `3.0` | Default classifier-free guidance scale |
-
-### CLAP
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_CLAP_MODEL` | str | `laion/clap-htsat-unfused` | CLAP model for text-audio similarity |
-| `TF_CLAP_SAMPLE_RATE` | int | `48000` | CLAP model input sample rate |
-| `TF_CLAP_SIM_FLOOR` | float | `0.15` | Cosine similarity floor (maps to score 0) |
-| `TF_CLAP_SIM_CEILING` | float | `0.60` | Cosine similarity ceiling (maps to score 1) |
-
-### MERT
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_MERT_MODEL` | str | `m-a-p/MERT-v1-95M` | MERT model for neural audio quality |
-| `TF_MERT_SAMPLE_RATE` | int | `24000` | MERT model input sample rate |
-| `TF_MERT_TEMPORAL_CENTER` | float | `0.85` | Temporal coherence bell curve center |
-| `TF_MERT_TEMPORAL_WIDTH` | float | `12.5` | Temporal coherence bell curve width |
-| `TF_MERT_LAYER_CENTER` | float | `0.6` | Layer agreement bell curve center |
-| `TF_MERT_LAYER_WIDTH` | float | `8.0` | Layer agreement bell curve width |
-| `TF_MERT_PERIODICITY_CENTER` | float | `0.5` | Periodicity bell curve center |
-| `TF_MERT_PERIODICITY_WIDTH` | float | `8.0` | Periodicity bell curve width |
-| `TF_MERT_EXPECTED_NORM` | float | `25.0` | Expected feature norm for normalization |
-
-### LUFS
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_LUFS_TOLERANCE` | float | `4.0` | LUFS loudness tolerance (dB) |
-
-### Preference Model
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
+| `TF_EMA_STATE_PATH` | str | `None` | Path to persist EMA state across restarts |
+| `TF_EMA_SAVE_INTERVAL` | int | `5` | Rounds between EMA state saves |
 | `TF_PREFERENCE_MODEL_PATH` | str | `None` | Path to trained PreferenceHead checkpoint (.pt) |
+| `TF_FAD_REFERENCE_STATS_PATH` | str | `./reference_fad_stats.npz` | Path to FAD reference statistics |
+| `TF_VALIDATOR_PERTURBATION_SECRET` | str | -- | Private nonce for weight perturbation seed. Required for validators. Never shared with miners. |
 
 ### API / Server
 
@@ -626,7 +628,6 @@ Must sum to 1.0. These control the internal breakdown of the `quality` component
 |----------|------|---------|-------------|
 | `TF_API_HOST` | str | `0.0.0.0` | API server bind host |
 | `TF_API_PORT` | int | `8000` | API server port |
-| `TF_API_MAX_QUEUE_SIZE` | int | `100` | Maximum pending API requests |
 | `TF_STORAGE_PATH` | str | `./storage` | Local storage path for snapshots and audio |
 | `TF_FRONTEND_URL` | str | `http://localhost:3000` | Frontend URL (used for CORS) |
 | `TF_VALIDATOR_API_URL` | str | `""` | Platform API base URL for validator data push |
@@ -658,14 +659,29 @@ TuneForge uses different storage backends depending on the component:
 | Component | Backend | Location |
 |-----------|---------|----------|
 | Miner leaderboard (EMA scores) | In-memory, JSON snapshot | `storage/leaderboard.json` |
+| EMA state | JSON (configurable path) | `TF_EMA_STATE_PATH` |
 | Plagiarism fingerprints | SQLite | `fingerprints.db` |
 | SaaS user accounts, credits, API keys | PostgreSQL (asyncpg) | Configured via `TF_DB_URL` |
 | Rate limiting, SSE pub/sub | Redis | Default port 6379 |
 | Audio files | Local filesystem (fallback) or platform API | `storage/` directory |
+| FAD reference statistics | NumPy archive | `TF_FAD_REFERENCE_STATS_PATH` |
+| Preference model checkpoint | PyTorch .pt file | `TF_PREFERENCE_MODEL_PATH` |
 
 ### PostgreSQL Schema
 
-Managed by Alembic async migrations in `alembic/`. Key tables include users, API keys, credits, generation records, validation rounds, annotation tasks, annotations, and preference models.
+Managed by Alembic async migrations in `alembic/`. Key tables include:
+
+- `users` -- user accounts
+- `api_keys` -- long-lived API keys
+- `credits` -- credit balances and daily resets (50/day free, 5 per generation)
+- `generations` -- generation request records
+- `validation_rounds` -- validator round data
+- `annotation_tasks` -- A/B comparison task definitions (quorum=5)
+- `annotations` -- individual user votes
+- `preference_models` -- trained model metadata with SHA256 checksums and validation accuracy
+- `annotator_reliability` -- per-annotator accuracy tracking
+- `annotation_milestones` -- annotator achievement tracking
+- `annotation_streaks` -- annotator streak tracking
 
 ### Running Migrations
 
@@ -680,6 +696,10 @@ alembic revision --autogenerate -m "describe change"
 ---
 
 ## Security Model
+
+### Weight Perturbation Secret
+
+The `TF_VALIDATOR_PERTURBATION_SECRET` env var provides a private nonce used in the perturbation seed: `SHA256(challenge_id + validator_secret)`. This prevents miners from reconstructing the exact perturbed weight distribution from the open-source code. Each validator must set a unique secret.
 
 ### Validator Stake Filtering
 
@@ -707,7 +727,7 @@ The API layer supports three authentication modes:
 
 ### Validator-to-API Service Token
 
-Validators push data to the platform API using a service token (`TF_VALIDATOR_SERVICE_TOKEN` / `TF_VALIDATOR_API_TOKEN`), verified by the `require_validator_token` dependency.
+Validators push data to the platform API using a service token (`TF_VALIDATOR_API_TOKEN`), verified by the `require_validator_token` dependency.
 
 ---
 
@@ -734,15 +754,20 @@ flowchart LR
 - **Task creation:** A/B comparison tasks are generated from validation round outputs.
 - **Voting:** Each user can vote once per task (`UNIQUE(task_id, user_id)`).
 - **Aggregation:** Majority vote at quorum (default 5 annotators). Ties are discarded.
+- **Active learning:** `active_learner.py` selects maximally informative pairs for annotation.
+- **Annotator reliability:** `annotator_reliability.py` tracks per-annotator accuracy and weights votes accordingly.
 - **Export:** `GET /annotations/export` returns JSONL format compatible with `train_preference.py`.
-- **Training:** `tools/export_and_train.py` handles export, CLAP embedding extraction, training, and model upload.
-- **Auto-update:** Validators check `GET /annotations/model/latest` once per hour and download if the SHA has changed.
+- **Training:** `tools/export_and_train.py` handles export, CLAP embedding extraction, Bradley-Terry pairwise training, and model upload.
+- **Auto-update:** Validators check `GET /annotations/model/latest` once per hour and download if the SHA256 has changed.
 
 ### Database Tables
 
 - `annotation_tasks` -- A/B comparison task definitions
 - `annotations` -- individual user votes
-- `preference_models` -- trained model metadata and storage
+- `preference_models` -- trained model metadata, SHA256 checksums, validation accuracy
+- `annotator_reliability` -- per-annotator accuracy and weight
+- `annotation_milestones` -- annotator achievement records
+- `annotation_streaks` -- annotator streak tracking
 
 ### API Endpoints
 
@@ -758,16 +783,17 @@ Eight endpoints under `/annotations/`: task listing, voting, statistics, export,
 pytest tests/
 ```
 
-Tests use `pytest-asyncio` in auto mode. Coverage reporting is available via `pytest-cov`.
+Tests use `pytest-asyncio` in auto mode. Coverage reporting is available via `pytest-cov`. Current status: 436 tests passing, 0 failures.
 
 ### Adding a New Scorer
 
 1. Create a new class in `tuneforge/scoring/` (see existing scorers for the interface pattern).
-2. Register it in `ProductionRewardModel` (the batch scoring orchestrator).
-3. Add a weight key to the `SCORING_WEIGHTS` dictionary in `tuneforge/config/scoring_config.py`.
-4. Set the default weight and add a `TF_WEIGHT_<NAME>` environment variable.
+2. Register it in `ProductionRewardModel` (the batch scoring orchestrator in `tuneforge/rewards/reward.py`).
+3. Add a weight key and value to the `SCORING_WEIGHTS` dictionary in `tuneforge/config/scoring_config.py`. Ensure weights still sum to 1.0.
 
-Existing scorer modules:
+There are no per-scorer environment variables. All weights are hardcoded constants for validator consensus.
+
+### Scorer Modules
 
 | Module | File |
 |--------|------|
@@ -780,68 +806,149 @@ Existing scorer modules:
 | Preference model | `tuneforge/scoring/preference_model.py` |
 | Structural completeness | `tuneforge/scoring/structural_completeness.py` |
 | Vocal quality | `tuneforge/scoring/vocal_quality.py` |
+| Vocal lyrics (Whisper) | `tuneforge/scoring/vocal_lyrics.py` |
+| Timbral naturalness | `tuneforge/scoring/timbral_naturalness.py` |
+| Mix separation | `tuneforge/scoring/mix_separation.py` |
+| Learned MOS | `tuneforge/scoring/learned_mos.py` |
+| Perceptual quality | `tuneforge/scoring/perceptual_quality.py` |
+| Neural codec (EnCodec) | `tuneforge/scoring/neural_codec_quality.py` |
 | Diversity | `tuneforge/scoring/diversity.py` |
 | Attribute verifier | `tuneforge/scoring/attribute_verifier.py` |
-| Plagiarism detection | `tuneforge/scoring/plagiarism.py` |
+| FAD scorer | `tuneforge/scoring/fad_scorer.py` |
 | Artifact detection | `tuneforge/scoring/artifact_detector.py` |
+| Plagiarism detection | `tuneforge/scoring/plagiarism.py` |
+| Stereo quality | `tuneforge/scoring/stereo_quality.py` |
+| Chord coherence | `tuneforge/scoring/chord_coherence.py` |
+| Harmonic quality | `tuneforge/scoring/harmonic_quality.py` |
 | Genre profiles | `tuneforge/scoring/genre_profiles.py` |
+| Multi-scale adjustment | `tuneforge/scoring/multi_scale.py` |
+| Conditional targets | `tuneforge/scoring/conditional_targets.py` |
+| Progressive difficulty | `tuneforge/scoring/progressive_difficulty.py` |
+| Active learner | `tuneforge/scoring/active_learner.py` |
+| Annotator reliability | `tuneforge/scoring/annotator_reliability.py` |
 
-### Modifying Scoring Weights
+### Supporting Tools
 
-Update defaults in `tuneforge/config/scoring_config.py`, or override at runtime via `TF_WEIGHT_*` environment variables. Weights must sum to 1.0.
-
-### Calibrating MERT Parameters
-
-Use the calibration tool to tune MERT bell-curve parameters against a sample of real audio:
-
-```bash
-python tools/calibrate_mert.py
-```
-
-This adjusts `TF_MERT_TEMPORAL_CENTER`, `TF_MERT_TEMPORAL_WIDTH`, `TF_MERT_LAYER_CENTER`, `TF_MERT_LAYER_WIDTH`, `TF_MERT_PERIODICITY_CENTER`, and `TF_MERT_PERIODICITY_WIDTH`.
+| Tool | File | Description |
+|------|------|-------------|
+| Annotate preferences | `tools/annotate_preferences.py` | CLI for A/B preference annotation |
+| Build embedding cache | `tools/build_embedding_cache.py` | Pre-compute CLAP embeddings for audio files |
+| Build reference stats | `tools/build_reference_stats.py` | Generate FAD reference statistics (.npz) |
+| Calibrate MERT | `tools/calibrate_mert.py` | Tune MERT parameters against sample audio |
+| Export and train | `tools/export_and_train.py` | Full preference model training pipeline |
+| Train preference | `tools/train_preference.py` | Standalone preference model training |
 
 ### Project Layout
 
 ```
 tuneforge/
   tuneforge/
-    __init__.py              # VERSION, NETUID, constants
-    settings.py              # Pydantic-settings singleton (TF_ prefix)
+    __init__.py                          # VERSION, NETUID, constants
+    settings.py                          # Pydantic-settings singleton (TF_ prefix)
+    subnet_api.py                        # Subnet API interface
     base/
-      protocol.py            # Synapse definitions
+      __init__.py
+      protocol.py                        # Synapse definitions
+      neuron.py                          # Base neuron class
+      miner.py                           # Base miner class
+      validator.py                       # Base validator class
+      dendrite.py                        # Dendrite (query client)
     config/
-      scoring_config.py      # Scoring weights and thresholds
-    scoring/                 # 14 scorer modules
+      __init__.py
+      scoring_config.py                  # Hardcoded scoring weights and thresholds
+    core/
+      __init__.py
+      miner.py                           # Core miner logic
+      validator.py                       # Core validator logic
+    generation/
+      __init__.py
+      audio_utils.py                     # Audio processing utilities
+      model_manager.py                   # Model loading and management
+      musicgen_backend.py                # MusicGen generation backend
+      stable_audio_backend.py            # Stable Audio generation backend
+      prompt_parser.py                   # Prompt parsing utilities
+    rewards/
+      __init__.py
+      reward.py                          # ProductionRewardModel (scoring orchestrator)
+      scoring.py                         # Score aggregation
+      leaderboard.py                     # EMA leaderboard
+      weight_setter.py                   # On-chain weight submission
+    scoring/                             # 18 scorer modules + support modules
+      __init__.py
+      clap_scorer.py                     # CLAP text-audio similarity (laion/larger_clap_music)
+      audio_quality.py                   # Classic audio quality sub-metrics
+      musicality.py                      # Rhythmic and harmonic analysis
+      production_quality.py              # Production quality
+      melody_coherence.py                # Melodic coherence
+      neural_quality.py                  # MERT neural quality (m-a-p/MERT-v1-95M)
+      preference_model.py               # Learned preference model
+      structural_completeness.py         # Structural completeness
+      vocal_quality.py                   # Vocal quality
+      vocal_lyrics.py                    # Whisper-based lyrics intelligibility
+      timbral_naturalness.py             # Spectral envelope, harmonic decay, transients
+      mix_separation.py                  # Spectral clarity, frequency masking, spatial depth
+      learned_mos.py                     # Multi-resolution perceptual quality estimation
+      perceptual_quality.py              # Perceptual audio quality
+      neural_codec_quality.py            # EnCodec reconstruction quality
+      diversity.py                       # Output diversity (50-entry history)
+      attribute_verifier.py              # Attribute verification
+      fad_scorer.py                      # Frechet Audio Distance
+      artifact_detector.py               # Clipping, loops, discontinuities
+      plagiarism.py                      # Self/cross-miner plagiarism detection
+      stereo_quality.py                  # Stereo quality analysis
+      chord_coherence.py                 # Chord progression coherence
+      harmonic_quality.py                # Harmonic quality analysis
+      genre_profiles.py                  # 9 genre families with weight adjustments
+      multi_scale.py                     # Duration-based weight adjustment
+      conditional_targets.py             # Prompt-derived quality targets
+      progressive_difficulty.py          # Network quality EMA -> challenge difficulty
+      active_learner.py                  # Active learning pair selection
+      annotator_reliability.py           # Per-annotator accuracy tracking
+    validation/
+      __init__.py
+      challenge_manager.py               # Challenge lifecycle management
+      prompt_generator.py                # Challenge prompt generation
     api/
-      server.py              # FastAPI application
-      auth.py                # 3-mode authentication
-      jwt_auth.py            # JWT + password hashing
-      credits.py             # Credit system
-      validator_api.py       # Organic generation API (runs inside validator)
-      redis_manager.py       # Rate limiting + SSE pub/sub
-      sse.py                 # Server-sent events
-      validator_auth.py      # Validator service token auth
-      database/
-        models.py            # SQLAlchemy models
-        engine.py            # Async engine setup
-        crud.py              # Database operations
+      __init__.py
+      server.py                          # FastAPI application
+      models.py                          # Pydantic request/response models
+      organic_router.py                  # Organic generation routing
+      validator_api.py                   # Organic generation API (runs inside validator)
       routes/
-        auth.py              # Auth endpoints
-        credits.py           # Credit endpoints
-        keys.py              # API key endpoints
-        generate.py          # Generation endpoints
-        validator.py         # Validator data push endpoints
-        annotations.py       # Annotation endpoints
+        __init__.py
+        generate.py                      # Generation endpoints
+        health.py                        # Health check endpoints
+    utils/
+      __init__.py
+      config.py                          # Configuration utilities
+      logging.py                         # Logging setup
+      weight_utils.py                    # Weight manipulation utilities
   neurons/
-    miner.py                 # Miner entrypoint
-    validator.py             # Validator entrypoint
+    __init__.py
+    miner.py                             # Miner entrypoint
+    validator.py                         # Validator entrypoint
   tools/
-    export_and_train.py      # Preference model training pipeline
-    calibrate_mert.py        # MERT parameter calibration
-  alembic/                   # Database migrations
-  docker-compose.yml         # Docker service definitions
-  ecosystem.config.js        # PM2 process definitions
-  Dockerfile.miner           # NVIDIA CUDA 12.1.1 image
-  Dockerfile.validator       # Python 3.11-slim image
-  requirements.txt           # Python dependencies
+    annotate_preferences.py              # CLI preference annotation
+    build_embedding_cache.py             # CLAP embedding pre-computation
+    build_reference_stats.py             # FAD reference statistics generation
+    calibrate_mert.py                    # MERT parameter calibration
+    export_and_train.py                  # Full preference model training pipeline
+    train_preference.py                  # Standalone preference model training
+  scripts/
+    download_models.sh                   # Pre-download ML models
+    run_miner.sh                         # Miner launch script
+    run_validator.sh                     # Validator launch script
+    setup.sh                             # Environment setup script
+  tests/
+    conftest.py                          # Test fixtures
+    test_*.py                            # 436 tests across all modules
+  alembic/                               # Database migrations
+  docker-compose.yml                     # Docker service definitions
+  ecosystem.config.js                    # PM2 process definitions
+  Dockerfile.miner                       # NVIDIA CUDA 12.1.1 image
+  Dockerfile.validator                   # Python 3.11-slim image
+  requirements.txt                       # Python dependencies
+  pyproject.toml                         # Project metadata
+  setup.py                              # Package setup
+  min_compute.yml                        # Minimum compute requirements
 ```

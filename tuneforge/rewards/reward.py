@@ -215,7 +215,7 @@ class ProductionRewardModel:
         neural_score = self._neural.aggregate(neural_scores)
         structural_scores = self._structural.score(audio, sr, genre=genre)
         structural_score = self._structural.aggregate(structural_scores)
-        vocal_scores = self._vocal.score(audio, sr, genre=genre)
+        vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
         vocal_score = self._vocal.aggregate(vocal_scores)
         attribute_score = self._attribute.verify_all(audio, sr, synapse)
         preference_score = self._preference.score(audio, sr)
@@ -230,6 +230,7 @@ class ProductionRewardModel:
         timbral_score = self._timbral.aggregate(timbral_scores)
         vocal_lyrics_scores = self._vocal_lyrics.score(
             audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+            vocals_requested=vocals_requested,
         )
         vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
         mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
@@ -387,7 +388,7 @@ class ProductionRewardModel:
                 neural_score = self._neural.aggregate(neural_scores)
                 structural_scores = self._structural.score(audio, sr, genre=genre)
                 structural_score = self._structural.aggregate(structural_scores)
-                vocal_scores = self._vocal.score(audio, sr, genre=genre)
+                vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
                 vocal_score = self._vocal.aggregate(vocal_scores)
                 attribute_score = self._attribute.verify_all(audio, sr, synapse)
                 preference_score = self._preference.score(audio, sr)
@@ -403,6 +404,7 @@ class ProductionRewardModel:
                 timbral_score = self._timbral.aggregate(timbral_scores)
                 vocal_lyrics_scores = self._vocal_lyrics.score(
                     audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+                    vocals_requested=vocals_requested,
                 )
                 vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
                 mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
