@@ -60,7 +60,7 @@ class TestFullCycle:
             assert len(raw) > 44
 
         # 4. Update leaderboard
-        lb = MinerLeaderboard(alpha=0.2, steepen_baseline=0.6, steepen_power=3.0)
+        lb = MinerLeaderboard(alpha=0.2, power=3.0)
         for uid, q in enumerate(qualities):
             lb.update(uid, q)
 
@@ -69,7 +69,7 @@ class TestFullCycle:
 
     def test_multi_round_weight_convergence(self):
         """Multiple rounds should converge weights to top performers."""
-        lb = MinerLeaderboard(alpha=0.2, steepen_baseline=0.6, steepen_power=3.0)
+        lb = MinerLeaderboard(alpha=0.2, power=3.0)
         pg = PromptGenerator(seed=42)
 
         # Simulate 15 rounds
@@ -80,14 +80,14 @@ class TestFullCycle:
             for uid, score in scores.items():
                 lb.update(uid, score)
 
-        # After warmup, only top miners get weight
+        # All miners get weight (no baseline threshold), but top miners get more
         w0 = lb.get_weight(0)
         w1 = lb.get_weight(1)
         w2 = lb.get_weight(2)
         w3 = lb.get_weight(3)
 
-        assert w0 > w1 > w2
-        assert w3 == 0.0  # Below baseline
+        assert w0 > w1 > w2 > w3
+        assert w3 > 0.0  # All miners with EMA > 0 get weight
 
     def test_weight_submission_mock(self):
         """Verify weights can be submitted to mock subtensor."""
@@ -100,7 +100,7 @@ class TestFullCycle:
         ws = WeightSetter(st, wallet, netuid=0, metagraph=mg, update_interval=10)
         st.advance_blocks(200)  # Ensure interval passed
 
-        lb = MinerLeaderboard(alpha=0.2, steepen_baseline=0.6, steepen_power=3.0)
+        lb = MinerLeaderboard(alpha=0.2, power=3.0)
         for _ in range(15):
             lb.update(0, 0.95)
             lb.update(1, 0.80)

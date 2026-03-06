@@ -2,8 +2,8 @@
 Miner leaderboard for TuneForge.
 
 Tracks exponential moving average (EMA) scores per miner UID.
-Applies a steepening function so only consistently good miners
-receive significant weight.
+Applies a power-law curve so top performers receive disproportionately
+more weight — all miners are scored, no threshold cutoff.
 """
 
 import json
@@ -17,40 +17,54 @@ from loguru import logger
 from tuneforge.config.scoring_config import (
     EMA_ALPHA,
     EMA_NEW_MINER_SEED,
-    STEEPEN_BASELINE,
+    ELITE_K,
+    ELITE_POOL,
     STEEPEN_POWER,
 )
 
-EMA_STATE_VERSION = 1
+EMA_STATE_VERSION = 3
 
 
 class MinerLeaderboard:
     """
-    EMA-based miner score tracker with steepening.
+    EMA-based miner score tracker with tiered power-law weighting.
+
+    Miners are ranked by EMA and split into two tiers:
+      - **Elite** (top K): share ``elite_pool`` fraction of total weight (default 80%)
+      - **Remaining**: share ``1 - elite_pool`` fraction (default 20%)
+
+    Within each tier, weight is distributed by ``ema ^ power``.
+    This creates a highly competitive landscape — miners fight for top-K
+    slots to earn the lion's share of incentive, mirroring organic routing
+    where only top-ranked miners receive real user queries.
 
     Parameters:
         alpha: EMA smoothing factor (higher -> more responsive).
-        steepen_baseline: EMA below this maps to weight 0.
-        steepen_power: Exponent for the steepening curve.
+        power: Exponent for the power-law curve (2.0 = quadratic).
+        elite_k: Number of miners in the elite tier.
+        elite_pool: Fraction of total weight reserved for elite tier.
     """
 
     def __init__(
         self,
         alpha: float = EMA_ALPHA,
-        steepen_baseline: float = STEEPEN_BASELINE,
-        steepen_power: float = STEEPEN_POWER,
+        power: float = STEEPEN_POWER,
+        elite_k: int = ELITE_K,
+        elite_pool: float = ELITE_POOL,
     ) -> None:
         self._alpha = alpha
-        self._baseline = steepen_baseline
-        self._power = steepen_power
+        self._power = power
+        self._elite_k = elite_k
+        self._elite_pool = elite_pool
 
         self._ema: dict[int, float] = {}
         self._rounds: dict[int, int] = {}
-        self._lock = threading.Lock()
+        self._hotkeys: dict[int, str] = {}
+        self._lock = threading.RLock()
 
         logger.info(
-            f"Leaderboard: alpha={alpha}, "
-            f"baseline={steepen_baseline}, power={steepen_power}"
+            f"Leaderboard: alpha={alpha}, power={power}, "
+            f"elite_k={elite_k}, elite_pool={elite_pool}"
         )
 
     def update(self, uid: int, raw_score: float) -> None:
@@ -72,15 +86,46 @@ class MinerLeaderboard:
 
             self._rounds[uid] = count + 1
 
+    def check_hotkey_changes(self, uid_to_hotkey: dict[int, str]) -> list[int]:
+        """Detect UID recycling by comparing hotkeys against last known values.
+
+        When a UID gets a new hotkey (new miner registered on that slot),
+        its EMA and round count are reset to 0 so the new miner starts fresh.
+
+        Args:
+            uid_to_hotkey: Mapping of UID -> current hotkey from metagraph.
+
+        Returns:
+            List of UIDs that were reset due to hotkey change.
+        """
+        reset_uids = []
+        with self._lock:
+            for uid, hotkey in uid_to_hotkey.items():
+                prev = self._hotkeys.get(uid)
+                if prev is not None and prev != hotkey:
+                    # Hotkey changed — new miner on this UID
+                    old_ema = self._ema.get(uid, 0.0)
+                    self._ema.pop(uid, None)
+                    self._rounds.pop(uid, None)
+                    reset_uids.append(uid)
+                    logger.info(
+                        f"UID {uid} hotkey changed ({prev[:8]}… → {hotkey[:8]}…), "
+                        f"EMA reset from {old_ema:.4f} to 0.0"
+                    )
+                self._hotkeys[uid] = hotkey
+        return reset_uids
+
     def get_weight(self, uid: int) -> float:
         """
-        Get steepened weight for a miner.
+        Get power-law weight for a miner.
 
-        Returns 0.0 if the miner's EMA is below the baseline.
+        Weight = ema ^ power. All miners with EMA > 0 get weight.
         """
         with self._lock:
             ema = self._ema.get(uid, 0.0)
-        return self._steepen(ema)
+        if ema <= 0.0:
+            return 0.0
+        return float(ema ** self._power)
 
     def get_ema(self, uid: int) -> float:
         """Get raw EMA score for a miner."""
@@ -88,39 +133,45 @@ class MinerLeaderboard:
             return self._ema.get(uid, 0.0)
 
     def get_all_weights(self) -> dict[int, float]:
-        """Get steepened weights for all tracked miners."""
+        """Get tiered power-law weights for all tracked miners.
+
+        Top ``elite_k`` miners (by EMA) share ``elite_pool`` of total weight.
+        Remaining miners share ``1 - elite_pool``.
+        Within each tier, weight is proportional to ``ema ^ power``.
+        """
         with self._lock:
-            uids = list(self._ema.keys())
-        return {uid: self.get_weight(uid) for uid in uids}
+            scored = {uid: ema for uid, ema in self._ema.items() if ema > 0}
+
+        if not scored:
+            return {}
+
+        # Rank by EMA descending
+        ranked = sorted(scored.items(), key=lambda x: x[1], reverse=True)
+
+        elite_k = min(self._elite_k, len(ranked))
+        elite = ranked[:elite_k]
+        rest = ranked[elite_k:]
+
+        def _distribute(miners: list, pool: float) -> dict[int, float]:
+            if not miners:
+                return {}
+            raw = {uid: ema ** self._power for uid, ema in miners}
+            total = sum(raw.values())
+            if total <= 0:
+                return {}
+            return {uid: (w / total) * pool for uid, w in raw.items()}
+
+        # If all miners fit in elite tier, they get 100%
+        if not rest:
+            return _distribute(elite, 1.0)
+
+        weights = _distribute(elite, self._elite_pool)
+        weights.update(_distribute(rest, 1.0 - self._elite_pool))
+        return weights
 
     def get_all_uids(self) -> list[int]:
         """Get all tracked miner UIDs."""
         return list(self._ema.keys())
-
-    def _steepen(self, ema: float) -> float:
-        """
-        Apply steepening function with soft floor.
-
-        Uses a sigmoid transition around the baseline instead of a hard cliff.
-        This prevents oscillation for miners near the threshold and reduces
-        on-chain weight churn.
-
-        Below (baseline - margin): weight approaches 0
-        At baseline: weight is approximately 0.5 of the power-law value
-        Above baseline: standard power-law steepening
-        """
-        # Soft sigmoid transition (width = 0.05 around baseline)
-        sigmoid_width = 0.05
-        sigmoid = 1.0 / (1.0 + np.exp(-(ema - self._baseline) / sigmoid_width))
-
-        # Power-law component (normalized above baseline)
-        if ema <= 0.0:
-            return 0.0
-        normalised = max(0.0, (ema - self._baseline) / (1.0 - self._baseline))
-        power_component = float(normalised ** self._power)
-
-        # Combine: sigmoid gates the power-law value
-        return float(sigmoid * power_component)
 
     def snapshot(self) -> dict:
         """Return a serialisable snapshot of the leaderboard state.
@@ -128,17 +179,22 @@ class MinerLeaderboard:
         Used to share EMA scores with the organic query router
         (which runs in a separate API server process).
         """
+        all_weights = self.get_all_weights()
         with self._lock:
+            ranked = sorted(self._ema.items(), key=lambda x: x[1], reverse=True)
             entries = {}
-            for uid in self._ema:
+            for rank, (uid, ema) in enumerate(ranked):
                 entries[str(uid)] = {
-                    "ema": round(self._ema[uid], 6),
-                    "weight": round(self._steepen(self._ema[uid]), 6),
+                    "ema": round(ema, 6),
+                    "weight": round(all_weights.get(uid, 0.0), 6),
+                    "rank": rank + 1,
+                    "tier": "elite" if rank < self._elite_k else "rest",
                     "rounds": self._rounds.get(uid, 0),
                 }
             return {
-                "baseline": self._baseline,
                 "miners": entries,
+                "elite_k": self._elite_k,
+                "elite_pool": self._elite_pool,
             }
 
     def save_snapshot(self, path: str) -> None:
@@ -167,7 +223,7 @@ class MinerLeaderboard:
         """Persist full EMA state to disk with atomic write and .bak backup.
 
         JSON format:
-            {"version": 1, "alpha": ..., "baseline": ..., "power": ...,
+            {"version": 2, "alpha": ..., "power": ...,
              "ema": {"uid": value, ...}, "rounds": {"uid": count, ...}}
         """
         dest = Path(path)
@@ -177,10 +233,10 @@ class MinerLeaderboard:
             data = {
                 "version": EMA_STATE_VERSION,
                 "alpha": self._alpha,
-                "baseline": self._baseline,
                 "power": self._power,
                 "ema": {str(k): v for k, v in self._ema.items()},
                 "rounds": {str(k): v for k, v in self._rounds.items()},
+                "hotkeys": {str(k): v for k, v in self._hotkeys.items()},
             }
 
         # Create backup of existing file
@@ -208,6 +264,7 @@ class MinerLeaderboard:
 
         Falls back to .bak if primary file is corrupt.
         Validates UIDs are non-negative and EMA values are in [0, 1].
+        Accepts both v1 (old baseline format) and v2 state files.
 
         Returns:
             True if state was loaded successfully, False otherwise.
@@ -244,8 +301,8 @@ class MinerLeaderboard:
             return False
 
         version = data.get("version", 0)
-        if version != EMA_STATE_VERSION:
-            logger.warning("EMA state ({}) version {} != {} — skipping", source, version, EMA_STATE_VERSION)
+        if version not in (1, 2, 3):
+            logger.warning("EMA state ({}) version {} not supported — skipping", source, version)
             return False
 
         raw_ema = data.get("ema", {})
@@ -289,28 +346,47 @@ class MinerLeaderboard:
             except (ValueError, TypeError):
                 continue
 
+        # Load hotkeys (v2+ only, v1 files won't have them)
+        loaded_hotkeys: dict[int, str] = {}
+        for uid_str, hotkey in data.get("hotkeys", {}).items():
+            try:
+                uid = int(uid_str)
+                if uid >= 0 and isinstance(hotkey, str) and hotkey:
+                    loaded_hotkeys[uid] = hotkey
+            except (ValueError, TypeError):
+                continue
+
         with self._lock:
             self._ema = loaded_ema
             self._rounds = loaded_rounds
+            self._hotkeys = loaded_hotkeys
 
         logger.info(
-            "Loaded EMA state from {} ({}): {} miners, {} skipped",
+            "Loaded EMA state from {} ({}): {} miners, {} hotkeys, {} skipped",
             source, "primary" if source == "primary" else "backup",
-            len(loaded_ema), skipped,
+            len(loaded_ema), len(loaded_hotkeys), skipped,
         )
         return True
 
     def summary(self) -> dict:
         """Produce leaderboard summary for logging."""
         if not self._ema:
-            return {"total_miners": 0, "above_baseline": 0}
+            return {"total_miners": 0, "with_weight": 0, "elite_count": 0}
 
-        above = sum(1 for uid in self._ema if self.get_weight(uid) > 0)
+        all_weights = self.get_all_weights()
+        with_weight = sum(1 for w in all_weights.values() if w > 0)
         emas = list(self._ema.values())
-        weights = [self.get_weight(uid) for uid in self._ema]
+        weights = list(all_weights.values()) if all_weights else []
+
+        ranked = sorted(self._ema.items(), key=lambda x: x[1], reverse=True)
+        elite_count = min(self._elite_k, len(ranked))
+        elite_weight = sum(all_weights.get(uid, 0) for uid, _ in ranked[:elite_count])
+
         return {
             "total_miners": len(self._ema),
-            "above_baseline": above,
+            "with_weight": with_weight,
+            "elite_count": elite_count,
+            "elite_weight_share": round(elite_weight, 4) if weights else 0.0,
             "ema_mean": float(np.mean(emas)),
             "ema_max": float(np.max(emas)),
             "weight_mean": float(np.mean(weights)) if weights else 0.0,

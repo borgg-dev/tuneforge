@@ -139,6 +139,15 @@ class TuneForgeValidator(BaseValidatorNeuron):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.resync_metagraph)
 
+        # Check for UID recycling (hotkey changes) and reset EMA for new miners
+        uid_to_hotkey = {
+            uid: self.metagraph.hotkeys[uid]
+            for uid in range(len(self.metagraph.hotkeys))
+        }
+        reset_uids = self._leaderboard.check_hotkey_changes(uid_to_hotkey)
+        if reset_uids:
+            logger.info(f"Reset EMA for {len(reset_uids)} recycled UIDs: {reset_uids}")
+
         # Cache block number once (synchronous chain call) so we don't
         # call self.block multiple times during the round.
         current_block = await loop.run_in_executor(None, lambda: self.block)
@@ -389,7 +398,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         logger.info(
             f"Round {self.current_round} complete: "
             f"{len(valid_responses)} scored, "
-            f"leaderboard: {lb_summary.get('above_baseline', 0)} above baseline, "
+            f"leaderboard: {lb_summary.get('with_weight', 0)} with weight, "
             f"duration={event.round_end_time - event.round_start_time:.1f}s"
         )
 

@@ -102,9 +102,15 @@ QUALITY_WEIGHTS: dict[str, float] = {
 # EMA / Leaderboard
 # ---------------------------------------------------------------------------
 EMA_ALPHA: float = 0.2
-STEEPEN_BASELINE: float = 0.45
 STEEPEN_POWER: float = 2.0
-EMA_NEW_MINER_SEED: float = 0.25
+EMA_NEW_MINER_SEED: float = 0.0
+
+# Tiered weight distribution: top ELITE_K miners share ELITE_POOL fraction
+# of total weight; remaining miners share (1 - ELITE_POOL).
+# This mirrors organic routing (top-10 get queries) and creates a
+# highly competitive landscape where miners fight for top-10 slots.
+ELITE_K: int = 10
+ELITE_POOL: float = 0.80
 
 # ---------------------------------------------------------------------------
 # Silence threshold

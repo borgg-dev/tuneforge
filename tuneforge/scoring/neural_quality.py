@@ -165,7 +165,9 @@ class NeuralQualityScorer:
                         # GPU OOM — fall back to CPU
                         if "out of memory" in str(gpu_err).lower():
                             logger.warning("GPU OOM during MERT inference, falling back to CPU")
+                            torch.cuda.empty_cache()
                             self._model = self._model.cpu()
+                            device = torch.device("cpu")
                             inputs = {k: v.cpu() for k, v in inputs.items()}
                             outputs = self._model(**inputs, output_hidden_states=True)
                         else:

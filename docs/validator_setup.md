@@ -14,7 +14,7 @@ A TuneForge validator performs the following duties:
 4. **Applies multi-scale evaluation** that adjusts scorer weights based on the requested duration (short, medium, long).
 5. **Applies genre-aware scoring** with per-genre targets across 9 genre families.
 6. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time. EMA state is persisted to disk.
-7. **Applies a steepening function** with a soft sigmoid floor to amplify high performers and suppress low performers.
+7. **Applies tiered power-law weighting** where the top 10 miners share 80% of weight and the rest share 20%.
 8. **Submits normalized weights** to the Bittensor chain every 115 blocks.
 9. **Handles organic SaaS queries** by fan-out to top miners, scoring responses, and updating EMA.
 10. **Optionally pushes round data** to the platform API (`TF_VALIDATOR_API_URL`).
@@ -331,38 +331,36 @@ Key parameters (hardcoded):
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | EMA_ALPHA | 0.2 | Smoothing factor. Higher = more responsive to recent rounds. |
-| EMA_NEW_MINER_SEED | 0.25 | New miners start at 0.25, not 0.0, giving them a fair ramp-up period. |
+| EMA_NEW_MINER_SEED | 0.0 | New miners start at 0.0 and build up from their first scored round. |
 
 EMA state is persisted to disk at the path specified by `TF_EMA_STATE_PATH` (default: `./ema_state.json`), saved every 5 blocks (`TF_EMA_SAVE_INTERVAL`). This means validator restarts do not lose EMA history.
 
-### Steepening Function
+### Tiered Power-Law Weighting
 
-The steepening function converts EMA scores into weights, amplifying top performers and suppressing underperformers. It uses a soft sigmoid floor (not a hard cliff).
+Miners are ranked by EMA and split into two tiers for weight distribution:
 
 Key parameters (hardcoded):
 
-| Parameter | Value |
-|-----------|-------|
-| STEEPEN_BASELINE | 0.45 |
-| STEEPEN_POWER | 2.0 |
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| ELITE_K | 10 | Number of miners in the elite tier |
+| ELITE_POOL | 0.80 | Fraction of total weight reserved for elite tier |
+| STEEPEN_POWER | 2.0 | Power-law exponent within each tier |
 
-Miners with EMA at or below the baseline (0.45) receive near-zero weight. Above the baseline:
+- **Elite tier** (top 10 miners by EMA): share **80%** of total weight
+- **Remaining miners**: share **20%** of total weight
 
-```
-weight = ((ema - baseline) / (1 - baseline)) ^ power
-```
+Within each tier, weight is distributed proportionally to `ema ^ power`:
 
-Example calculations with baseline = 0.45, power = 2.0:
+| Tier | EMA Score | Weight Share (example with 20 miners) |
+|------|-----------|---------------------------------------|
+| Elite (#1) | 0.90 | ~14.5% |
+| Elite (#5) | 0.80 | ~11.5% |
+| Elite (#10) | 0.65 | ~7.6% |
+| Rest (#11) | 0.60 | ~4.5% |
+| Rest (#20) | 0.40 | ~2.0% |
 
-| EMA Score | Calculation | Weight |
-|-----------|-------------|--------|
-| 0.45 | 0.0 | 0.000 |
-| 0.55 | ((0.55 - 0.45) / 0.55)^2 = 0.182^2 | 0.033 |
-| 0.65 | ((0.65 - 0.45) / 0.55)^2 = 0.364^2 | 0.132 |
-| 0.80 | ((0.80 - 0.45) / 0.55)^2 = 0.636^2 | 0.405 |
-| 0.95 | ((0.95 - 0.45) / 0.55)^2 = 0.909^2 | 0.826 |
-
-Only consistently high-quality miners earn meaningful rewards.
+The tier boundary creates a sharp incentive cliff: breaking into the top 10 provides roughly a 4x weight multiplier. This mirrors the organic query routing where only top-ranked miners receive real user requests. When fewer than 10 miners are active, all share 100% of the weight pool.
 
 ### Weight Submission
 
@@ -409,7 +407,7 @@ The preference model adds a human-aligned quality signal to the scoring pipeline
 ## Monitoring
 
 - **Log files** are written to `TF_LOG_DIR` (default: `/tmp/tuneforge`).
-- **Leaderboard summary** is logged each round: total miners scored, number above baseline, EMA mean and max.
+- **Leaderboard summary** is logged each round: total miners scored, number with weight, elite count, EMA mean and max.
 - **Per-miner detail** is logged each round: raw reward, current EMA, and computed weight.
 - **Leaderboard snapshot** is saved to `storage/leaderboard.json` after each round.
 - **Weights & Biases**: enable with `TF_WANDB_ENABLED=true` for real-time dashboards of scoring metrics, EMA progression, and weight distributions.

@@ -247,15 +247,15 @@ Scoring weights are adjusted based on audio duration:
 
 9 genre families with per-genre weight adjustments. Vocal gate with `vocals_requested` override -- when the synapse requests vocals, vocal-related scorers are activated regardless of genre profile defaults.
 
-### Leaderboard EMA
+### Leaderboard EMA and Tiered Weighting
 
 Raw round scores are smoothed with exponential moving average:
 
 - **Alpha:** 0.2
-- **Seed value:** 0.25
-- **Baseline:** 0.45
-- **Power transform:** 2.0 above baseline with soft sigmoid floor (no hard cliff)
-- **Formula:** `((ema - 0.45) / 0.55) ^ 2.0` with soft sigmoid at the floor
+- **Seed value:** 0.0 (new miners start from zero)
+- **Tiered distribution:** Top 10 miners share 80% of weight, rest share 20%
+- **Within-tier formula:** `ema ^ 2.0` (quadratic power-law)
+- **Elite K:** 10, **Elite Pool:** 0.80
 
 ### Preference Model
 

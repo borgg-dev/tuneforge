@@ -15,13 +15,13 @@ class TestEMAPersistence:
         """Create leaderboard, update miners, save, load into new leaderboard, verify."""
         path = str(tmp_path / "ema_state.json")
 
-        lb1 = MinerLeaderboard(alpha=0.2, steepen_baseline=0.5, steepen_power=2.0)
+        lb1 = MinerLeaderboard(alpha=0.2, power=2.0)
         lb1.update(0, 0.8)
         lb1.update(1, 0.6)
         lb1.update(0, 0.9)  # second update for UID 0
         lb1.save_state(path)
 
-        lb2 = MinerLeaderboard(alpha=0.2, steepen_baseline=0.5, steepen_power=2.0)
+        lb2 = MinerLeaderboard(alpha=0.2, power=2.0)
         assert lb2.load_state(path) is True
 
         # EMA values should match
@@ -116,17 +116,22 @@ class TestEMAPersistence:
         assert data["version"] == EMA_STATE_VERSION
 
     def test_new_miner_seed(self):
-        """New miners start at EMA_NEW_MINER_SEED (0.25) instead of 0.0."""
+        """New miners start at EMA_NEW_MINER_SEED (0.0) — no artificial boost."""
         lb = MinerLeaderboard(alpha=0.2)
 
-        # Before any update, EMA should be 0.0 (default for get_ema on missing UID)
+        # Before any update, EMA should be 0.0
         assert lb.get_ema(99) == 0.0
 
-        # After first update with score 0.0, EMA should reflect the seed
-        # EMA = alpha * 0.0 + (1 - alpha) * seed = 0.8 * 0.25 = 0.20
+        # After first update with score 0.0, EMA stays 0.0 (seed is 0.0)
+        # EMA = alpha * 0.0 + (1 - alpha) * 0.0 = 0.0
         lb.update(99, 0.0)
-        expected = 0.2 * 0.0 + 0.8 * 0.25  # 0.20
-        assert abs(lb.get_ema(99) - expected) < 1e-6
+        assert abs(lb.get_ema(99) - 0.0) < 1e-6
+
+        # After first update with a real score, EMA reflects only that score
+        lb2 = MinerLeaderboard(alpha=0.2)
+        lb2.update(50, 0.8)
+        expected = 0.2 * 0.8 + 0.8 * 0.0  # 0.16
+        assert abs(lb2.get_ema(50) - expected) < 1e-6
 
     def test_scorer_dropout(self):
         """Verify _perturb_weights can zero some scorers via dropout."""

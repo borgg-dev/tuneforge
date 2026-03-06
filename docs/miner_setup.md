@@ -285,7 +285,7 @@ The system recognizes 9 genre families with per-genre quality targets:
 - **Speed (2%):** Generate faster than real-time if possible, but do not sacrifice quality. Speed is only 2% of the total score.
 - **Duration accuracy matters.** Stay within 20% of the requested duration to avoid the duration penalty.
 - **Organic queries** (where `is_organic=True`) do not affect your validation score.
-- **New miners** start with an EMA score of 0.25 (not 0.0), so you will not be immediately penalized while ramping up.
+- **New miners** start with an EMA score of 0.0 and build up from their first scored round. The top 10 miners by EMA share 80% of total weight, creating a highly competitive ladder.
 - **MAX_DURATION is 180 seconds.** Validators may request audio up to 3 minutes long.
 
 ---
@@ -368,7 +368,7 @@ Check logs for per-signal scoring breakdowns. The most common causes of low scor
 1. **Poor prompt adherence** -- the largest single signal at 15%.
 2. **Running a small model** -- larger models score higher across nearly all quality dimensions.
 3. **Duration mismatch** -- generating audio that is too short or too long relative to the request.
-4. **Repeated outputs** -- diversity tracking covers 50 recent generations and includes cross-miner comparison.
+4. **Repeated outputs** -- diversity tracking covers 50 recent generations with population-level diversity bonus.
 
 ### No Challenges Received
 

@@ -78,17 +78,16 @@ class TestSpeedScoring:
         assert PRM._speed_score(syn) == pytest.approx(0.5)
 
 
-class TestLeaderboardSteepening:
-    """Tests for the steepening function and baseline behavior (FIND-005)."""
+class TestLeaderboardPowerLaw:
+    """Tests for the power-law weighting function."""
 
-    def test_below_baseline_is_zero(self):
+    def test_low_ema_gets_weight(self):
         lb = MinerLeaderboard()
-        # Manually set EMA below baseline
         lb._ema[0] = 0.30
-        lb._rounds[0] = 20  # warmed up
-        assert lb.get_weight(0) == 0.0
+        lb._rounds[0] = 20
+        assert lb.get_weight(0) > 0.0  # No threshold — all miners get weight
 
-    def test_above_baseline_positive(self):
+    def test_high_ema_more_weight(self):
         lb = MinerLeaderboard()
         lb._ema[0] = 0.60
         lb._rounds[0] = 20

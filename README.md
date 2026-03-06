@@ -75,7 +75,7 @@ graph TB
     V -->|organic fan-out| M2
 ```
 
-**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 3 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with steepening, and submit weights on-chain.
+**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 3 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen small/medium/large or Stable Audio), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO.
 
@@ -248,7 +248,7 @@ graph LR
     D --> E[3 Penalty Multipliers]
     E --> F[Round Score]
     F --> G[EMA Update]
-    G --> H[Steepening]
+    G --> H[Tiered Weighting]
     H --> I[On-Chain Weights]
 ```
 
@@ -260,18 +260,16 @@ Each miner's long-term performance is tracked via an exponential moving average:
 ema_new = 0.2 * round_score + 0.8 * ema_old
 ```
 
-New miners start with EMA = 0.25 and ramp up gradually. A miner consistently scoring 0.7 takes ~8 rounds (~40 minutes) to cross the steepening baseline and begin receiving weight. This cold-start behaviour prevents a single good round from granting immediate ranking.
+New miners start with EMA = 0.0 and build up from their first scored round. The EMA alpha of 0.2 balances responsiveness to recent performance with stability against outlier rounds. EMA state is persisted to disk every 5 blocks.
 
-The EMA alpha of 0.2 (`TF_EMA_ALPHA`) balances responsiveness to recent performance with stability against outlier rounds. EMA state is persisted to disk every 5 blocks.
+### Tiered Power-Law Weighting
 
-### Steepening
+Miners are ranked by EMA and split into two tiers for weight distribution:
 
-Raw EMA scores are transformed before weight submission to reward top performers disproportionately:
+- **Elite tier** (top 10 miners by EMA): share **80%** of total weight
+- **Remaining miners**: share **20%** of total weight
 
-1. Miners with EMA below the baseline of 0.45 (`TF_STEEPEN_BASELINE`) receive zero weight (soft sigmoid floor).
-2. Miners above baseline are mapped: `weight = ((ema - 0.45) / 0.55) ^ 2.0`
-
-The power of 2.0 (`TF_STEEPEN_POWER`) creates a convex curve that concentrates emissions on consistently high-performing miners.
+Within each tier, weight is distributed proportionally to `ema ^ 2.0` (quadratic power-law). This creates a highly competitive landscape: breaking into the top 10 is a 4x weight multiplier, mirroring the organic query routing where only top-ranked miners receive real user requests. When fewer than 10 miners are active, all share 100% of the weight pool.
 
 ### Weight Submission
 
@@ -465,7 +463,7 @@ tuneforge/
 │   │   └── prompt_parser.py       -- Natural language prompt builder
 │   ├── rewards/
 │   │   ├── reward.py              -- ProductionRewardModel (composite scoring)
-│   │   ├── leaderboard.py         -- EMA leaderboard with steepening
+│   │   ├── leaderboard.py         -- EMA leaderboard with tiered power-law weighting
 │   │   ├── weight_setter.py       -- On-chain weight submission
 │   │   └── scoring.py             -- Task-level scorer
 │   ├── scoring/
