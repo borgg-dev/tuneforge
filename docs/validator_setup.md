@@ -10,7 +10,7 @@ A TuneForge validator performs the following duties:
 
 1. **Generates diverse music challenges** from a combinatorial space of genre, mood, tempo, key signature, instruments, vocals/lyrics requests, and creative constraints (100,000+ unique combinations per challenge). Duration range: 1--180 seconds.
 2. **Sends challenges to miners** in batches via Bittensor dendrite.
-3. **Scores responses** across 18 independent scoring dimensions, 4 penalty multipliers, and a set of hard-zero conditions.
+3. **Scores responses** across 18 independent scoring dimensions, 3 penalty multipliers, and a set of hard-zero conditions.
 4. **Applies multi-scale evaluation** that adjusts scorer weights based on the requested duration (short, medium, long).
 5. **Applies genre-aware scoring** with per-genre targets across 9 genre families.
 6. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time. EMA state is persisted to disk.
@@ -183,10 +183,10 @@ The `Dockerfile.validator` uses `python:3.11-slim` (no CUDA) and pre-downloads t
 
 ## The Scoring Pipeline
 
-Every validation round, the validator scores each miner response across 18 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
+Every validation round, the validator scores each miner response across 18 dimensions, applies 3 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
 
 ```
-final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+final = composite * duration_penalty * artifact_penalty * fad_penalty
 ```
 
 All scoring weights and thresholds described below are **hardcoded for consensus**. Validators cannot modify them. This ensures all validators produce consistent scores.
@@ -230,7 +230,7 @@ ratio = generation_time / requested_duration
 
 Uses validator-measured `dendrite.process_time`, not miner-reported time. If no validator timing is available, defaults to 0.5.
 
-### 4 Penalty Multipliers
+### 3 Penalty Multipliers
 
 These are applied multiplicatively to the composite score after dimension scoring.
 
@@ -239,7 +239,6 @@ These are applied multiplicatively to the composite score after dimension scorin
 | **Duration** | Requested vs. actual duration mismatch | Within 20% tolerance: no penalty. Linear decay from 1.0 to 0.0 between 20% and 50% deviation. Beyond 50%: multiplier = 0.0. |
 | **Artifact** | Clipping, loops, spectral discontinuities, spectral holes | Multiplier on final score based on artifact severity. |
 | **FAD** | Per-miner Frechet Audio Distance | Sigmoid curve with midpoint=15, steepness=2, floor=0.5. Reference stats loaded from `TF_FAD_REFERENCE_STATS_PATH`. |
-| **Soft Plagiarism** | Cosine similarity in [0.65, 0.72] zone | Multiplier decays from 1.0 to 0.05 within the soft zone. |
 
 ### Hard-Zero Conditions
 
@@ -249,9 +248,6 @@ These override the final score to 0.0 regardless of dimension scores:
 |-----------|---------|
 | **Silence** | Audio RMS below 0.01 |
 | **Timeout** | Round-trip time exceeds 300 seconds |
-| **Hard Self-Plagiarism** | Self-similarity above 0.72 (CLAP cosine) |
-| **Hard Cross-Miner Plagiarism** | Cross-miner similarity above 0.70 |
-| **Canonical-Form Plagiarism** | Audio is normalized to pitch C and tempo 120 BPM before embedding comparison, preventing trivial transposition/tempo-shift evasion |
 
 ### Anti-Gaming Measures
 

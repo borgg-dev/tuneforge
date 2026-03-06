@@ -44,9 +44,7 @@ Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
 - Artifact penalty              — spectral discontinuities, clipping, loops
 - FAD penalty                   — per-miner Frechet Audio Distance from real music
-- Soft plagiarism penalty       — smooth cosine penalty for near-matches (0.65-0.72)
-
-Hard penalties override composite scores (plagiarism, silence, timeout).
+Hard penalties override composite scores (silence, timeout).
 
 Multi-scale evaluation adjusts weights based on audio duration:
 - Short clips (<10s): emphasize production quality
@@ -58,7 +56,6 @@ weight is doubled and vocal weight is 1.5x (then renormalized).
 Anti-gaming:
 - Per-round weight perturbation (±30%) with SECRET seed (auto-generated if not set)
 - Scorer dropout (10%)
-- Canonical-form plagiarism detection (pitch/tempo normalized)
 - Population-level diversity bonus
 """
 
@@ -100,7 +97,6 @@ from tuneforge.scoring.musicality import MusicalityScorer
 from tuneforge.scoring.neural_codec_quality import NeuralCodecQualityScorer
 from tuneforge.scoring.neural_quality import NeuralQualityScorer
 from tuneforge.scoring.perceptual_quality import PerceptualQualityScorer
-from tuneforge.scoring.plagiarism import PlagiarismDetector
 from tuneforge.scoring.preference_model import PreferenceModel
 from tuneforge.scoring.production_quality import ProductionQualityScorer
 from tuneforge.scoring.structural_completeness import StructuralCompletenessScorer
@@ -130,10 +126,6 @@ class ProductionRewardModel:
             clap_scorer=self._clap,
             neural_scorer=self._neural,
         )
-        self._plagiarism = PlagiarismDetector(
-            clap_scorer=self._clap,
-            reference_embeddings_path=getattr(config, "reference_embeddings_path", None),
-        )
         self._fad = FADScorer(
             window_size=FAD_WINDOW_SIZE,
             reference_stats_path=FAD_REFERENCE_STATS_PATH or None,
@@ -148,7 +140,7 @@ class ProductionRewardModel:
         self._learned_mos = LearnedMOSScorer()
         self._multi_scale = MultiScaleEvaluator()
         self._config = config
-        logger.info("ProductionRewardModel initialised (18 scorers + 4 penalties + multi-scale)")
+        logger.info("ProductionRewardModel initialised (18 scorers + 3 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -166,7 +158,7 @@ class ProductionRewardModel:
         Args:
             synapse: The response synapse from the miner.
             all_responses: All responses in this round (for diversity).
-            miner_hotkey: Miner's hotkey for plagiarism tracking.
+            miner_hotkey: Miner's hotkey for FAD tracking.
 
         Returns:
             Composite reward in [0, 1].
@@ -184,13 +176,6 @@ class ProductionRewardModel:
 
         if self._is_timeout(synapse):
             logger.debug("Timeout response — score 0")
-            return 0.0
-
-        is_plagiarized, _ = self._plagiarism.check(
-            audio, sr, miner_hotkey, synapse.challenge_id
-        )
-        if is_plagiarized:
-            logger.debug("Plagiarized audio — score 0")
             return 0.0
 
         # --- Component scores (genre-aware) ---
@@ -244,9 +229,6 @@ class ProductionRewardModel:
         # --- Penalty multipliers ---
         duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
         artifact_penalty = self._artifact.detect(audio, sr)
-
-        # Soft plagiarism penalty (computed during check() above, cached)
-        soft_plag_penalty = self._plagiarism.get_soft_penalty(audio, sr, miner_hotkey)
 
         # FAD: update miner embedding and get penalty
         self._fad.update_miner_embedding(miner_hotkey, clap_emb_for_fad)
@@ -307,7 +289,7 @@ class ProductionRewardModel:
             + phrase_bonus + arc_bonus
         )
 
-        final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plag_penalty
+        final = composite * duration_penalty * artifact_penalty * fad_penalty
 
         logger.debug(
             f"Scores: clap={clap_score:.3f} quality={quality_score:.3f} "
@@ -320,15 +302,8 @@ class ProductionRewardModel:
             f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
             f"speed={speed_score:.3f} div={diversity_score:.3f} "
             f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
-            f"fad_pen={fad_penalty:.3f} plag_pen={soft_plag_penalty:.3f} → {final:.3f}"
+            f"fad_pen={fad_penalty:.3f} → {final:.3f}"
         )
-
-        # Clear round cache after single-response scoring to prevent
-        # stale embeddings leaking across calls.
-        # Note: this means cross-miner plagiarism detection only works in
-        # score_batch(), not score_response(). This is by design — single
-        # response scoring lacks the batch context needed for cross-miner checks.
-        self._plagiarism.clear_round_cache()
 
         return float(np.clip(final, 0.0, 1.0))
 
@@ -351,151 +326,137 @@ class ProductionRewardModel:
         diversity_scores = self._diversity.score_batch(synapses, miner_hotkeys)
 
         rewards: list[float] = []
-        try:
-            for i, synapse in enumerate(synapses):
-                audio, sr, raw_audio = self._decode_audio(synapse)
-                hotkey = miner_hotkeys[i] if i < len(miner_hotkeys) else ""
+        for i, synapse in enumerate(synapses):
+            audio, sr, raw_audio = self._decode_audio(synapse)
+            hotkey = miner_hotkeys[i] if i < len(miner_hotkeys) else ""
 
-                if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
-                    rewards.append(0.0)
-                    continue
+            if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
+                rewards.append(0.0)
+                continue
 
-                is_plagiarized, _ = self._plagiarism.check(
-                    audio, sr, hotkey, synapse.challenge_id
-                )
-                if is_plagiarized:
-                    rewards.append(0.0)
-                    continue
+            genre = getattr(synapse, "genre", "") or ""
+            challenge_id = getattr(synapse, "challenge_id", "") or ""
+            expected_lyrics = getattr(synapse, "lyrics", "") or ""
+            vocals_requested = getattr(synapse, "vocals_requested", False)
 
-                genre = getattr(synapse, "genre", "") or ""
-                challenge_id = getattr(synapse, "challenge_id", "") or ""
-                expected_lyrics = getattr(synapse, "lyrics", "") or ""
-                vocals_requested = getattr(synapse, "vocals_requested", False)
+            clap_score = self._clap.score(audio, sr, synapse.prompt)
+            # Capture CLAP embedding immediately — attribute verifier
+            # also calls CLAP and overwrites last_embedding
+            clap_emb_for_fad = self._clap.last_embedding
+            quality_scores = self._quality.score(audio, sr, genre=genre)
+            quality_score = self._quality.aggregate(quality_scores)
+            musicality_scores = self._musicality.score(audio, sr, genre=genre)
+            musicality_score = self._musicality.aggregate(musicality_scores)
+            production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
+            production_score = self._production.aggregate(production_scores)
+            melody_scores = self._melody.score(audio, sr)
+            melody_score = self._melody.aggregate(melody_scores)
+            neural_scores = self._neural.score(audio, sr)
+            neural_score = self._neural.aggregate(neural_scores)
+            structural_scores = self._structural.score(audio, sr, genre=genre)
+            structural_score = self._structural.aggregate(structural_scores)
+            vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
+            vocal_score = self._vocal.aggregate(vocal_scores)
+            attribute_score = self._attribute.verify_all(audio, sr, synapse)
+            preference_score = self._preference.score(audio, sr)
+            perceptual_scores = self._perceptual.score(audio, sr)
+            perceptual_score = self._perceptual.aggregate(perceptual_scores)
+            neural_codec_scores = self._neural_codec.score(audio, sr)
+            neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
+            speed_score = self._speed_score(synapse)
+            diversity_score = diversity_scores[i]
 
-                clap_score = self._clap.score(audio, sr, synapse.prompt)
-                # Capture CLAP embedding immediately — attribute verifier
-                # also calls CLAP and overwrites last_embedding
-                clap_emb_for_fad = self._clap.last_embedding
-                quality_scores = self._quality.score(audio, sr, genre=genre)
-                quality_score = self._quality.aggregate(quality_scores)
-                musicality_scores = self._musicality.score(audio, sr, genre=genre)
-                musicality_score = self._musicality.aggregate(musicality_scores)
-                production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
-                production_score = self._production.aggregate(production_scores)
-                melody_scores = self._melody.score(audio, sr)
-                melody_score = self._melody.aggregate(melody_scores)
-                neural_scores = self._neural.score(audio, sr)
-                neural_score = self._neural.aggregate(neural_scores)
-                structural_scores = self._structural.score(audio, sr, genre=genre)
-                structural_score = self._structural.aggregate(structural_scores)
-                vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
-                vocal_score = self._vocal.aggregate(vocal_scores)
-                attribute_score = self._attribute.verify_all(audio, sr, synapse)
-                preference_score = self._preference.score(audio, sr)
-                perceptual_scores = self._perceptual.score(audio, sr)
-                perceptual_score = self._perceptual.aggregate(perceptual_scores)
-                neural_codec_scores = self._neural_codec.score(audio, sr)
-                neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
-                speed_score = self._speed_score(synapse)
-                diversity_score = diversity_scores[i]
+            # Naturalness & mix scorers
+            timbral_scores = self._timbral.score(audio, sr, genre=genre)
+            timbral_score = self._timbral.aggregate(timbral_scores)
+            vocal_lyrics_scores = self._vocal_lyrics.score(
+                audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+                vocals_requested=vocals_requested,
+            )
+            vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
+            mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
+            mix_sep_score = self._mix_separation.aggregate(mix_sep_scores)
+            mos_scores = self._learned_mos.score(audio, sr)
+            mos_score = self._learned_mos.aggregate(mos_scores)
 
-                # Naturalness & mix scorers
-                timbral_scores = self._timbral.score(audio, sr, genre=genre)
-                timbral_score = self._timbral.aggregate(timbral_scores)
-                vocal_lyrics_scores = self._vocal_lyrics.score(
-                    audio, sr, genre=genre, expected_lyrics=expected_lyrics,
-                    vocals_requested=vocals_requested,
-                )
-                vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
-                mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
-                mix_sep_score = self._mix_separation.aggregate(mix_sep_scores)
-                mos_scores = self._learned_mos.score(audio, sr)
-                mos_score = self._learned_mos.aggregate(mos_scores)
+            duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
+            artifact_penalty = self._artifact.detect(audio, sr)
 
-                duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
-                artifact_penalty = self._artifact.detect(audio, sr)
+            # FAD: update miner embedding and get penalty
+            self._fad.update_miner_embedding(hotkey, clap_emb_for_fad)
+            fad_penalty = self._fad.get_fad_penalty(hotkey)
 
-                # Soft plagiarism penalty (partial score reduction for near-matches)
-                soft_plag_penalty = self._plagiarism.get_soft_penalty(audio, sr, hotkey)
+            # Multi-scale weight adjustment
+            duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
+            scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
-                # FAD: update miner embedding and get penalty
-                self._fad.update_miner_embedding(hotkey, clap_emb_for_fad)
-                fad_penalty = self._fad.get_fad_penalty(hotkey)
+            weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
 
-                # Multi-scale weight adjustment
-                duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
-                scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
+            # Preference weight: zero in bootstrap, auto-scale when trained
+            if self._preference.is_bootstrap:
+                weights["preference"] = 0.0
+            else:
+                weights["preference"] = self._preference.get_scaled_weight()
 
-                weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+            # Vocals-requested boost
+            if vocals_requested:
+                weights["vocal_lyrics"] = weights.get("vocal_lyrics", 0) * 2.0
+                weights["vocal"] = weights.get("vocal", 0) * 1.5
 
-                # Preference weight: zero in bootstrap, auto-scale when trained
-                if self._preference.is_bootstrap:
-                    weights["preference"] = 0.0
-                else:
-                    weights["preference"] = self._preference.get_scaled_weight()
+            # Extract multi-scale bonuses before applying multipliers
+            phrase_bonus = scale_multipliers.pop("phrase_coherence_bonus", 0.0)
+            arc_bonus = scale_multipliers.pop("compositional_arc_bonus", 0.0)
 
-                # Vocals-requested boost
-                if vocals_requested:
-                    weights["vocal_lyrics"] = weights.get("vocal_lyrics", 0) * 2.0
-                    weights["vocal"] = weights.get("vocal", 0) * 1.5
+            # Apply multi-scale multipliers
+            for key in weights:
+                if key in scale_multipliers:
+                    weights[key] *= scale_multipliers[key]
+            total_w = sum(weights.values())
+            if total_w > 0:
+                weights = {k: v / total_w for k, v in weights.items()}
 
-                # Extract multi-scale bonuses before applying multipliers
-                phrase_bonus = scale_multipliers.pop("phrase_coherence_bonus", 0.0)
-                arc_bonus = scale_multipliers.pop("compositional_arc_bonus", 0.0)
+            composite = (
+                weights.get("clap", 0) * clap_score
+                + weights.get("quality", 0) * quality_score
+                + weights.get("musicality", 0) * musicality_score
+                + weights.get("production", 0) * production_score
+                + weights.get("melody", 0) * melody_score
+                + weights.get("neural_quality", 0) * neural_score
+                + weights.get("structural", 0) * structural_score
+                + weights.get("vocal", 0) * vocal_score
+                + weights.get("attribute", 0) * attribute_score
+                + weights.get("preference", 0) * preference_score
+                + weights.get("perceptual", 0) * perceptual_score
+                + weights.get("neural_codec", 0) * neural_codec_score
+                + weights.get("timbral", 0) * timbral_score
+                + weights.get("vocal_lyrics", 0) * vocal_lyrics_score
+                + weights.get("mix_separation", 0) * mix_sep_score
+                + weights.get("learned_mos", 0) * mos_score
+                + weights.get("diversity", 0) * diversity_score
+                + weights.get("speed", 0) * speed_score
+                + phrase_bonus + arc_bonus
+            )
 
-                # Apply multi-scale multipliers
-                for key in weights:
-                    if key in scale_multipliers:
-                        weights[key] *= scale_multipliers[key]
-                total_w = sum(weights.values())
-                if total_w > 0:
-                    weights = {k: v / total_w for k, v in weights.items()}
+            final = float(np.clip(
+                composite * duration_penalty * artifact_penalty * fad_penalty,
+                0.0, 1.0,
+            ))
 
-                composite = (
-                    weights.get("clap", 0) * clap_score
-                    + weights.get("quality", 0) * quality_score
-                    + weights.get("musicality", 0) * musicality_score
-                    + weights.get("production", 0) * production_score
-                    + weights.get("melody", 0) * melody_score
-                    + weights.get("neural_quality", 0) * neural_score
-                    + weights.get("structural", 0) * structural_score
-                    + weights.get("vocal", 0) * vocal_score
-                    + weights.get("attribute", 0) * attribute_score
-                    + weights.get("preference", 0) * preference_score
-                    + weights.get("perceptual", 0) * perceptual_score
-                    + weights.get("neural_codec", 0) * neural_codec_score
-                    + weights.get("timbral", 0) * timbral_score
-                    + weights.get("vocal_lyrics", 0) * vocal_lyrics_score
-                    + weights.get("mix_separation", 0) * mix_sep_score
-                    + weights.get("learned_mos", 0) * mos_score
-                    + weights.get("diversity", 0) * diversity_score
-                    + weights.get("speed", 0) * speed_score
-                    + phrase_bonus + arc_bonus
-                )
+            logger.debug(
+                f"UID scoring: clap={clap_score:.3f} quality={quality_score:.3f} "
+                f"musicality={musicality_score:.3f} production={production_score:.3f} "
+                f"melody={melody_score:.3f} neural={neural_score:.3f} "
+                f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
+                f"attr={attribute_score:.3f} pref={preference_score:.3f} "
+                f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
+                f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
+                f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
+                f"speed={speed_score:.3f} div={diversity_score:.3f} "
+                f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
+                f"fad_pen={fad_penalty:.3f} → {final:.3f}"
+            )
 
-                final = float(np.clip(
-                    composite * duration_penalty * artifact_penalty * fad_penalty * soft_plag_penalty,
-                    0.0, 1.0,
-                ))
-
-                logger.debug(
-                    f"UID scoring: clap={clap_score:.3f} quality={quality_score:.3f} "
-                    f"musicality={musicality_score:.3f} production={production_score:.3f} "
-                    f"melody={melody_score:.3f} neural={neural_score:.3f} "
-                    f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
-                    f"attr={attribute_score:.3f} pref={preference_score:.3f} "
-                    f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
-                    f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
-                    f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
-                    f"speed={speed_score:.3f} div={diversity_score:.3f} "
-                    f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
-                    f"fad_pen={fad_penalty:.3f} plag_pen={soft_plag_penalty:.3f} → {final:.3f}"
-                )
-
-                rewards.append(final)
-        finally:
-            # Always clear plagiarism round cache, even on exception
-            self._plagiarism.clear_round_cache()
+            rewards.append(final)
 
         # Update intra-miner diversity history after scoring so that the
         # current round's embedding does not inflate its own diversity score.

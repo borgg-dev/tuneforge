@@ -26,7 +26,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 
 ## Architecture Overview
 
-TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 18 dimensions with 4 penalty multipliers, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
+TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 18 dimensions with 3 penalty multipliers, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
 
 ```mermaid
 flowchart TB
@@ -94,7 +94,7 @@ sequenceDiagram
     M->>D: Return base64 WAV in synapse
     D->>V: Collect responses
     V->>RM: score_batch(responses)
-    Note over RM: Decode audio, check hard penalties,<br/>compute 18 signals + 4 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
+    Note over RM: Decode audio, check hard penalties,<br/>compute 18 signals + 3 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
     RM->>LB: update(scores)
     Note over LB: Apply EMA smoothing (alpha=0.2)
     LB->>LB: Save snapshot to storage/leaderboard.json
@@ -142,8 +142,6 @@ flowchart LR
     A[Decode Audio] --> B{Hard Penalties}
     B -->|Silence RMS < 0.01| Z[Score = 0]
     B -->|Timeout > 300s| Z
-    B -->|Self-plagiarism > 0.72| Z
-    B -->|Cross-miner > 0.70| Z
     B -->|Pass| C[18 Component Scores]
     C --> D[Multi-Scale Duration Adjustment]
     D --> E[Per-Round Weight Perturbation +/-30%]
@@ -152,8 +150,7 @@ flowchart LR
     G --> H[Duration Penalty Multiplier]
     H --> I[Artifact Penalty Multiplier]
     I --> J[FAD Penalty Multiplier]
-    J --> K[Soft Plagiarism Penalty]
-    K --> L[Final Score 0 to 1]
+    J --> K[Final Score 0 to 1]
 ```
 
 ### Hard Penalties
@@ -164,10 +161,6 @@ Any of the following results in an immediate score of 0:
 |-----------|-----------|
 | Silence | RMS < 0.01 |
 | Timeout | > 300 seconds |
-| Self-plagiarism | Fingerprint cosine similarity > 0.72 |
-| Cross-miner plagiarism | Fingerprint cosine similarity > 0.70 |
-
-Plagiarism uses canonical-form comparison: audio is normalized to pitch C and tempo 120 BPM before computing embeddings.
 
 ### Scoring Components (18 Scorers)
 
@@ -218,12 +211,12 @@ Speed uses a **duration-relative ratio** (generation_time / requested_duration),
 
 Speed is measured using the validator-side `dendrite.process_time`, not miner-reported `generation_time_ms`.
 
-### 4 Penalty Multipliers
+### 3 Penalty Multipliers
 
 Penalties are applied multiplicatively to the weighted composite score:
 
 ```
-final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+final = composite * duration_penalty * artifact_penalty * fad_penalty
 ```
 
 | Penalty | Formula |
@@ -231,7 +224,6 @@ final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_pla
 | **Duration** | +/-20% tolerance = 1.0, linear decay to 0.0 at +/-50% deviation |
 | **Artifact** | Detects clipping, loops, discontinuities. Multiplier range 0--1. |
 | **FAD** | Sigmoid curve: midpoint=15, steepness=2, floor=0.5 |
-| **Soft plagiarism** | Cosine similarity in [0.65, 0.72]: multiplier decays from 1.0 to 0.05 |
 
 ### Anti-Gaming Measures
 
@@ -279,9 +271,6 @@ Raw round scores are smoothed with exponential moving average:
 | MAX_DURATION | 180 seconds |
 | CLAP_SIM_CEILING | 0.75 |
 | CLAP_SIM_FLOOR | 0.15 |
-| Self-plagiarism threshold | 0.72 |
-| Cross-miner plagiarism threshold | 0.70 |
-| Soft plagiarism zone | 0.65--0.72 |
 | Silence threshold (RMS) | 0.01 |
 | Timeout | 300 seconds |
 | Diversity history | 50 entries |
@@ -554,7 +543,7 @@ pm2 delete all
 
 All variables use the `TF_` prefix and are loaded via `pydantic-settings`.
 
-**Important:** All scoring weights, thresholds, penalty parameters, EMA constants, speed curves, plagiarism thresholds, and CLAP/MERT model parameters are **hardcoded constants** in `tuneforge/config/scoring_config.py`. They are NOT configurable via environment variables. This is by design -- all validators must use identical scoring parameters for consensus. See the [Scoring Pipeline](#scoring-pipeline) section for the full list of hardcoded values.
+**Important:** All scoring weights, thresholds, penalty parameters, EMA constants, speed curves, and CLAP/MERT model parameters are **hardcoded constants** in `tuneforge/config/scoring_config.py`. They are NOT configurable via environment variables. This is by design -- all validators must use identical scoring parameters for consensus. See the [Scoring Pipeline](#scoring-pipeline) section for the full list of hardcoded values.
 
 The environment variables below control only **operational** parameters.
 
@@ -660,7 +649,6 @@ TuneForge uses different storage backends depending on the component:
 |-----------|---------|----------|
 | Miner leaderboard (EMA scores) | In-memory, JSON snapshot | `storage/leaderboard.json` |
 | EMA state | JSON (configurable path) | `TF_EMA_STATE_PATH` |
-| Plagiarism fingerprints | SQLite | `fingerprints.db` |
 | SaaS user accounts, credits, API keys | PostgreSQL (asyncpg) | Configured via `TF_DB_URL` |
 | Rate limiting, SSE pub/sub | Redis | Default port 6379 |
 | Audio files | Local filesystem (fallback) or platform API | `storage/` directory |
@@ -816,7 +804,6 @@ There are no per-scorer environment variables. All weights are hardcoded constan
 | Attribute verifier | `tuneforge/scoring/attribute_verifier.py` |
 | FAD scorer | `tuneforge/scoring/fad_scorer.py` |
 | Artifact detection | `tuneforge/scoring/artifact_detector.py` |
-| Plagiarism detection | `tuneforge/scoring/plagiarism.py` |
 | Stereo quality | `tuneforge/scoring/stereo_quality.py` |
 | Chord coherence | `tuneforge/scoring/chord_coherence.py` |
 | Harmonic quality | `tuneforge/scoring/harmonic_quality.py` |
@@ -894,7 +881,6 @@ tuneforge/
       attribute_verifier.py              # Attribute verification
       fad_scorer.py                      # Frechet Audio Distance
       artifact_detector.py               # Clipping, loops, discontinuities
-      plagiarism.py                      # Self/cross-miner plagiarism detection
       stereo_quality.py                  # Stereo quality analysis
       chord_coherence.py                 # Chord progression coherence
       harmonic_quality.py                # Harmonic quality analysis

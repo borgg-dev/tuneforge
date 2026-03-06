@@ -23,7 +23,7 @@ class CLAPScorer:
 
     @property
     def last_embedding(self) -> np.ndarray | None:
-        """Last computed audio embedding (for reuse by FAD/plagiarism)."""
+        """Last computed audio embedding (for reuse by FAD/diversity)."""
         return self._last_embedding
 
     def _load(self) -> None:
@@ -101,7 +101,7 @@ class CLAPScorer:
                 audio_out = self._model.get_audio_features(**audio_inputs)
                 audio_embeds = audio_out if isinstance(audio_out, torch.Tensor) else audio_out.pooler_output
 
-            # Cache raw audio embedding for reuse by FAD/plagiarism scorers
+            # Cache raw audio embedding for reuse by FAD/diversity scorers
             self._last_embedding = audio_embeds.cpu().numpy().flatten()
 
             # Cosine similarity → [0, 1] via calibrated range mapping
@@ -124,7 +124,7 @@ class CLAPScorer:
 
     def get_audio_embedding(self, audio: np.ndarray, sample_rate: int) -> np.ndarray | None:
         """
-        Get CLAP audio embedding for plagiarism/diversity checks.
+        Get CLAP audio embedding for diversity/FAD checks.
 
         Returns:
             512-dim embedding vector, or None on failure.

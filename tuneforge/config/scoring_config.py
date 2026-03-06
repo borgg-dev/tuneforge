@@ -107,14 +107,8 @@ STEEPEN_POWER: float = 2.0
 EMA_NEW_MINER_SEED: float = 0.25
 
 # ---------------------------------------------------------------------------
-# Plagiarism / silence thresholds
+# Silence threshold
 # ---------------------------------------------------------------------------
-SELF_PLAGIARISM_THRESHOLD: float = 0.72
-# Soft plagiarism zone: similarity between soft and hard threshold gets a
-# smooth cosine penalty instead of hard zero.
-SOFT_PLAGIARISM_THRESHOLD: float = 0.65
-# Cross-miner plagiarism uses a slightly stricter threshold
-CROSS_MINER_PLAGIARISM_THRESHOLD: float = 0.70
 SILENCE_THRESHOLD: float = 0.01
 
 # ---------------------------------------------------------------------------

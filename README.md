@@ -14,7 +14,7 @@
 
 ---
 
-TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **4 penalty multipliers**. The subnet supports MusicGen and Stable Audio backends, with an EMA-based leaderboard that translates performance into on-chain weight and TAO emissions.
+TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **3 penalty multipliers**. The subnet supports MusicGen and Stable Audio backends, with an EMA-based leaderboard that translates performance into on-chain weight and TAO emissions.
 
 **Testnet netuid: 234** | **Mainnet: TBD**
 
@@ -38,7 +38,7 @@ graph TB
     subgraph Validators
         V[Validator Node]
         CG[Challenge Generator<br/>100k+ prompt combos]
-        SC[Scoring Pipeline<br/>18 scorers + 4 penalties]
+        SC[Scoring Pipeline<br/>18 scorers + 3 penalties]
         MS[Multi-Scale Evaluator]
         LB[EMA Leaderboard]
         WS[Weight Setter]
@@ -75,7 +75,7 @@ graph TB
     V -->|organic fan-out| M2
 ```
 
-**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with steepening, and submit weights on-chain.
+**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 3 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with steepening, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen small/medium/large or Stable Audio), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO.
 
@@ -201,17 +201,15 @@ Every validation round, miners are scored across **18 weighted signals** grouped
 Penalties are applied as multipliers on the final composite score, not as weighted components:
 
 ```
-final_score = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+final_score = composite * duration_penalty * artifact_penalty * fad_penalty
 ```
 
 | Penalty | Trigger | Effect |
 |---------|---------|--------|
 | **Silence** | Audio RMS below 0.01 | Hard zero (score = 0.0) |
 | **Timeout** | Round-trip exceeds 300s | Hard zero (score = 0.0) |
-| **Hard Plagiarism** | Self-similarity > 0.72, cross-miner > 0.70 | Hard zero (score = 0.0) |
 | **Duration** | Audio duration off-target by >20% | Linear penalty (1.0 at 20% to 0.0 at 50%) |
 | **Artifacts** | Spectral discontinuities, clipping, loops | Multiplier (0.0 - 1.0) |
-| **Soft Plagiarism** | Self-similarity in [0.65, 0.72] | Cosine-smoothed curve (1.0 to 0.05) |
 | **FAD** | Per-miner Frechet Audio Distance divergence | Sigmoid penalty (floor 0.5) |
 
 ### Speed Scoring
@@ -247,7 +245,7 @@ graph LR
     A[Challenge] --> B[Miner Responses]
     B --> C[18-Signal Scoring]
     C --> D[Multi-Scale Adjust]
-    D --> E[4 Penalty Multipliers]
+    D --> E[3 Penalty Multipliers]
     E --> F[Round Score]
     F --> G[EMA Update]
     G --> H[Steepening]
@@ -286,13 +284,6 @@ TuneForge employs multiple layered mechanisms to prevent miners from gaming the 
 **Weight Perturbation.** Each round, scoring weights are perturbed by up to 30% (`TF_WEIGHT_PERTURBATION=0.30`), seeded deterministically by `SHA256(challenge_id + validator_secret)`. The validator secret (`TF_VALIDATOR_PERTURBATION_SECRET`) is a private nonce that is **never transmitted to miners**, making it impossible for miners to reconstruct the exact perturbed weights from open-source code.
 
 **Scorer Dropout.** Each non-zero scorer has a 10% independent probability of being zeroed per round (`TF_SCORER_DROPOUT_RATE=0.10`), using the same secret-seeded RNG. This prevents miners from consistently exploiting any single scorer.
-
-**Plagiarism Detection.** Three-layer detection with canonical-form comparison:
-- **Self-plagiarism**: 50-entry history per miner, hard zero at similarity > 0.72
-- **Cross-miner**: Within-round comparison, hard zero at similarity > 0.70
-- **Reference DB**: Against known material, threshold 0.85
-- **Canonical-form**: Audio is pitch-normalized (to C) and tempo-normalized (to 120 BPM) before embedding comparison, catching pitch-shifted or time-stretched plagiarism attempts
-- **Soft penalty zone**: Similarity in [0.65, 0.72] applies a smooth cosine penalty curve from 1.0 to 0.05
 
 **FAD Penalty.** Per-miner Frechet Audio Distance measures how far a miner's output distribution diverges from real music statistics. Uses a sigmoid penalty curve with a floor of 0.5.
 
@@ -497,7 +488,6 @@ tuneforge/
 │   │   ├── attribute_verifier.py  -- Prompt compliance (tempo, key, instruments)
 │   │   ├── fad_scorer.py          -- Frechet Audio Distance (per-miner)
 │   │   ├── artifact_detector.py   -- Clipping, loops, discontinuity
-│   │   ├── plagiarism.py          -- Self/cross-miner/reference + canonical-form
 │   │   ├── stereo_quality.py      -- Stereo imaging metrics
 │   │   ├── chord_coherence.py     -- Harmonic structure analysis
 │   │   ├── harmonic_quality.py    -- Vocal/formant characteristics

@@ -197,7 +197,7 @@ pm2 start ecosystem.config.js --only tuneforge-miner-2
 
 ## How Scoring Works
 
-Understanding the scoring system helps you maximize rewards. The validator evaluates your audio across 18 scoring signals and applies 4 penalty multipliers.
+Understanding the scoring system helps you maximize rewards. The validator evaluates your audio across 18 scoring signals and applies 3 penalty multipliers.
 
 ### Scoring Signals (18 scorers)
 
@@ -235,20 +235,19 @@ The generation time is measured by the validator via `dendrite.process_time`, no
 
 ### Final Score Calculation
 
-The composite score from all 18 scorers is multiplied by four penalty factors:
+The composite score from all 18 scorers is multiplied by three penalty factors:
 
 ```
-final_score = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+final_score = composite * duration_penalty * artifact_penalty * fad_penalty
 ```
 
-### Penalty Multipliers (4)
+### Penalty Multipliers (3)
 
 | Penalty | Trigger | Effect |
 |---------|---------|--------|
 | Duration | Off-target by more than 20% | Linear penalty reaching 0.0 at 50% deviation |
 | Artifact | Clipping, loops, spectral discontinuities | Multiplier 0-1 applied to final score |
 | FAD | Per-miner Frechet Audio Distance | Sigmoid curve, floor 0.5 |
-| Soft Plagiarism | Cosine similarity in [0.65, 0.72] zone | Cosine-shaped penalty from 1.0 down to 0.05 |
 
 ### Hard Penalties (score = 0)
 
@@ -256,10 +255,6 @@ final_score = composite * duration_penalty * artifact_penalty * fad_penalty * so
 |-----------|-----------|
 | Silence | RMS below 0.01 |
 | Timeout | Round-trip exceeds 300 seconds |
-| Self-plagiarism | Self-similarity above 0.72 |
-| Cross-miner plagiarism | Cross-miner similarity above 0.70 |
-
-Plagiarism detection uses canonical-form comparison: audio is normalized to pitch C and tempo 120 BPM before computing CLAP embeddings.
 
 ### Multi-Scale Evaluation
 
