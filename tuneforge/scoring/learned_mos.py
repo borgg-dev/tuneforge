@@ -1,5 +1,5 @@
 """
-Learned Mean Opinion Score (MOS) scorer for TuneForge.
+Multi-resolution perceptual quality scorer for TuneForge.
 
 Estimates perceptual audio quality using signal-processing heuristics that
 correlate with human quality judgements.  Unlike individual signal-level
@@ -8,6 +8,10 @@ robustness testing, loudness consistency, and harmonic richness into a
 single composite quality estimate.
 
 No pre-trained neural models are required -- only numpy, scipy, and librosa.
+
+Note: Despite the class name ``LearnedMOSScorer``, this scorer uses
+handcrafted heuristics, not a learned model.  The name is retained for
+backwards compatibility with existing configs and weight keys.
 """
 
 import numpy as np
@@ -192,7 +196,7 @@ class LearnedMOSScorer:
         """
         Low-bitrate codec robustness test.
 
-        Resamples to 16 kHz, applies a low-pass filter at 8 kHz, and
+        Resamples to 16 kHz, applies a low-pass filter at 4 kHz, and
         measures spectral divergence between the original and degraded
         versions.  High-quality audio degrades gracefully; AI artefacts
         often amplify under bandwidth reduction.
@@ -206,9 +210,9 @@ class LearnedMOSScorer:
             else:
                 degraded = audio.copy()
 
-            # Low-pass Butterworth at 8 kHz (Nyquist of degraded signal)
+            # Low-pass Butterworth at 4 kHz to simulate bandwidth reduction
             nyq = target_sr / 2.0
-            cutoff = 8000.0 / nyq
+            cutoff = 4000.0 / nyq
             # Clamp cutoff to valid range for butter
             cutoff = min(cutoff, 0.99)
             if cutoff > 0.01:

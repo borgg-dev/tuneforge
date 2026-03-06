@@ -480,9 +480,12 @@ class MixSeparationScorer:
                     # Very high correlation (>0.8) means they are glued (bad);
                     # negative or zero means they are unrelated (neutral).
                     if correlation > 0.8:
-                        kick_score = 0.3
+                        # Smooth continuation: 0.3 at 0.8 → 0.2 at 1.0
+                        kick_score = 0.3 - (correlation - 0.8) * 0.5
+                        kick_score = max(kick_score, 0.1)
                     elif correlation > 0.3:
-                        kick_score = 1.0 - (correlation - 0.3) / 0.5
+                        # Linear from 0.6 at 0.3 → 0.3 at 0.8 (continuous)
+                        kick_score = 0.6 - (correlation - 0.3) * 0.6
                     else:
                         kick_score = 0.6  # Neutral for low correlation.
                 else:

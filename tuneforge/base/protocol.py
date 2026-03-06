@@ -45,7 +45,7 @@ class MusicGenerationSynapse(bt.Synapse):
     duration_seconds: float = Field(
         default=10.0,
         ge=1.0,
-        le=60.0,
+        le=180.0,
         description="Desired audio duration in seconds",
     )
     key_signature: str | None = Field(
@@ -71,6 +71,14 @@ class MusicGenerationSynapse(bt.Synapse):
     challenge_id: str = Field(
         default="",
         description="Unique challenge ID for this validation round",
+    )
+    lyrics: str | None = Field(
+        default=None,
+        description="Expected lyrics text for vocal music generation",
+    )
+    vocals_requested: bool = Field(
+        default=False,
+        description="Whether the user explicitly wants vocal music",
     )
     is_organic: bool = Field(
         default=False,

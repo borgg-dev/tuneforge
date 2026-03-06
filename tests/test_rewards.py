@@ -67,7 +67,8 @@ class TestSpeedScoring:
 
     def test_mid_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = self._make_synapse_with_process_time(45.0)
+        # ratio = 30 / 10 = 3.0 → score ≈ 0.30 (duration-relative)
+        syn = self._make_synapse_with_process_time(30.0)
         score = PRM._speed_score(syn)
         assert 0.2 <= score <= 0.4
 

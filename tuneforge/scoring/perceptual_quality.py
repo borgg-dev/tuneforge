@@ -84,9 +84,14 @@ class PerceptualQualityScorer:
     @staticmethod
     def _score_hf_presence(audio, sr, librosa) -> float:
         """High-frequency energy presence (4kHz+). Good music has some."""
+        # If sample rate is too low to represent 4kHz, return neutral
+        if sr < 8000:
+            return 0.5
         S = np.abs(librosa.stft(audio, n_fft=2048))
         freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
         hf_mask = freqs >= 4000
+        if not np.any(hf_mask):
+            return 0.5
         hf_energy = float(np.sum(S[hf_mask, :] ** 2))
         total_energy = float(np.sum(S**2)) + 1e-10
         hf_ratio = hf_energy / total_energy

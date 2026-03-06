@@ -2,45 +2,49 @@
 Production reward model for TuneForge.
 
 Combines signal sources into a single 0-1 reward per miner response.
-Quality is the primary driver; prompt adherence is secondary.
+Prompt adherence is the primary user-facing signal; quality prevents
+technical defects from reaching users.
 
 18 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
 
-Prompt adherence (15%):
-- CLAP text-audio similarity   (15%)  — upgraded to larger_clap_music
+Prompt adherence (24%):
+- CLAP text-audio similarity   (15%)  — kept at 15% to avoid gaming amplification
+- Attribute verification        (9%)  — tempo, key, instruments (concrete, less gameable)
 
-Attribute verification (8%):
-- Tempo, key, instruments      (8%)
+Composition (21%):
+- Musicality metrics            (9%)  — pitch, harmony, rhythm, arrangement, chords
+- Melody coherence              (6%)  — melodic intervals, contour, structure
+- Structural completeness       (6%)  — section detection, song form
 
-Core music quality (42%):
-- Musicality metrics            (8%)  — pitch, harmony, rhythm, arrangement, chords
-- Neural quality (MERT)         (6%)  — learned music representations
-- Melody coherence              (5%)  — melodic intervals, contour, structure
-- Structural completeness       (5%)  — section detection, song form
-- Harmonic quality              (4%)  — vocal presence, clarity, formant structure
+Production & fidelity (16%):
 - Production quality metrics    (5%)  — spectral balance, loudness, dynamics, stereo
-- Preference model              (6%)  — learned human preference (auto-scales 2-10%)
-- Audio quality metrics         (3%)  — signal-level analysis
+- Neural quality (MERT)         (5%)  — learned music representations
+- Harmonic quality              (4%)  — vocal presence, clarity, formant structure
+- Audio quality metrics         (2%)  — signal-level analysis
 
-NEW scorers addressing audit gaps (20%):
-- Timbral naturalness           (7%)  — spectral envelope, harmonic decay, transients
-- Vocal/lyrics quality          (5%)  — vocal clarity, lyrics intelligibility, pitch, sibilance
+Naturalness & mix (20%):
+- Vocal/lyrics quality          (8%)  — vocal clarity, lyrics intelligibility, pitch, sibilance
+- Timbral naturalness           (5%)  — spectral envelope, harmonic decay, transients
 - Mix separation                (4%)  — spectral clarity, frequency masking, spatial depth
-- Learned MOS                   (4%)  — multi-resolution perceptual quality estimation
+- Multi-resolution quality      (3%)  — multi-resolution perceptual quality estimation
 
-Perceptual quality (4%):
-- Perceptual quality            (2%)  — spectral MOS estimator
-- Neural codec quality          (2%)  — EnCodec reconstruction quality
+Perceptual quality (2%):
+- Perceptual quality            (1%)  — spectral MOS estimator
+- Neural codec quality          (1%)  — EnCodec reconstruction quality
 
-Other (11%):
+Preference (0% bootstrap / 2-20% when trained):
+- Preference model              — learned human preference (auto-scales 2-20%)
+  Zeroed out in bootstrap mode (no trained model); weight redistributed to other scorers.
+
+Other (10%):
 - Diversity                     (8%)  — intra-miner + population-level diversity
-- Speed                         (3%)  — adjusted curve: 15s=1.0, 45s=0.3, >90s=0.0
+- Speed                         (2%)  — duration-relative: gen_time/requested_duration
 
 Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
 - Artifact penalty              — spectral discontinuities, clipping, loops
 - FAD penalty                   — per-miner Frechet Audio Distance from real music
-- Soft plagiarism penalty       — partial score reduction for near-matches (0.65-0.72)
+- Soft plagiarism penalty       — smooth cosine penalty for near-matches (0.65-0.72)
 
 Hard penalties override composite scores (plagiarism, silence, timeout).
 
@@ -48,8 +52,11 @@ Multi-scale evaluation adjusts weights based on audio duration:
 - Short clips (<10s): emphasize production quality
 - Long clips (>30s): emphasize structural coherence + melodic development
 
+Vocals-requested boost: when synapse.vocals_requested is True, vocal_lyrics
+weight is doubled and vocal weight is 1.5x (then renormalized).
+
 Anti-gaming:
-- Per-round weight perturbation (±30%) with SECRET seed (not challenge_id alone)
+- Per-round weight perturbation (±30%) with SECRET seed (auto-generated if not set)
 - Scorer dropout (10%)
 - Canonical-form plagiarism detection (pitch/tempo normalized)
 - Population-level diversity bonus
@@ -69,10 +76,6 @@ from tuneforge.config.scoring_config import (
     SILENCE_THRESHOLD,
     DURATION_TOLERANCE,
     DURATION_TOLERANCE_MAX,
-    SPEED_BEST_SECONDS,
-    SPEED_MID_SECONDS,
-    SPEED_MID_SCORE,
-    SPEED_MAX_SECONDS,
     GENERATION_TIMEOUT,
     WEIGHT_PERTURBATION,
     FAD_WINDOW_SIZE,
@@ -138,14 +141,14 @@ class ProductionRewardModel:
             penalty_steepness=FAD_PENALTY_STEEPNESS,
             penalty_floor=FAD_PENALTY_FLOOR,
         )
-        self._diversity = DiversityScorer()
+        self._diversity = DiversityScorer(clap_scorer=self._clap)
         self._timbral = TimbralNaturalnessScorer()
         self._vocal_lyrics = VocalLyricsScorer()
         self._mix_separation = MixSeparationScorer()
         self._learned_mos = LearnedMOSScorer()
         self._multi_scale = MultiScaleEvaluator()
         self._config = config
-        logger.info("ProductionRewardModel initialised (18 scorers + 3 penalties + multi-scale)")
+        logger.info("ProductionRewardModel initialised (18 scorers + 4 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -194,8 +197,12 @@ class ProductionRewardModel:
         genre = getattr(synapse, "genre", "") or ""
         challenge_id = getattr(synapse, "challenge_id", "") or ""
         expected_lyrics = getattr(synapse, "lyrics", "") or ""
+        vocals_requested = getattr(synapse, "vocals_requested", False)
 
         clap_score = self._clap.score(audio, sr, synapse.prompt)
+        # Capture CLAP embedding immediately — attribute verifier
+        # also calls CLAP and overwrites last_embedding
+        clap_emb_for_fad = self._clap.last_embedding
         quality_scores = self._quality.score(audio, sr, genre=genre)
         quality_score = self._quality.aggregate(quality_scores)
         musicality_scores = self._musicality.score(audio, sr, genre=genre)
@@ -218,7 +225,7 @@ class ProductionRewardModel:
         neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
         speed_score = self._speed_score(synapse)
 
-        # NEW scorers (Phase 2/3 audit fixes)
+        # Naturalness & mix scorers
         timbral_scores = self._timbral.score(audio, sr, genre=genre)
         timbral_score = self._timbral.aggregate(timbral_scores)
         vocal_lyrics_scores = self._vocal_lyrics.score(
@@ -237,12 +244,35 @@ class ProductionRewardModel:
         duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
         artifact_penalty = self._artifact.detect(audio, sr)
 
+        # Soft plagiarism penalty (computed during check() above, cached)
+        soft_plag_penalty = self._plagiarism.get_soft_penalty(audio, sr, miner_hotkey)
+
+        # FAD: update miner embedding and get penalty
+        self._fad.update_miner_embedding(miner_hotkey, clap_emb_for_fad)
+        fad_penalty = self._fad.get_fad_penalty(miner_hotkey)
+
         # --- Multi-scale weight adjustment ---
         duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
         scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
         # --- Per-round weight perturbation (anti-gaming) ---
         weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+
+        # --- Preference weight: zero in bootstrap, auto-scale when trained ---
+        if self._preference.is_bootstrap:
+            weights["preference"] = 0.0
+        else:
+            weights["preference"] = self._preference.get_scaled_weight()
+
+        # --- Vocals-requested boost: increase vocal_lyrics weight when user
+        # explicitly wants vocals, decrease instrumental-focused scorers ---
+        if vocals_requested:
+            weights["vocal_lyrics"] = weights.get("vocal_lyrics", 0) * 2.0
+            weights["vocal"] = weights.get("vocal", 0) * 1.5
+
+        # Extract multi-scale bonuses before applying multipliers to weights
+        phrase_bonus = scale_multipliers.pop("phrase_coherence_bonus", 0.0)
+        arc_bonus = scale_multipliers.pop("compositional_arc_bonus", 0.0)
 
         # Apply multi-scale multipliers to weights
         for key in weights:
@@ -273,9 +303,10 @@ class ProductionRewardModel:
             + weights.get("learned_mos", 0) * mos_score
             + weights.get("diversity", 0) * diversity_score
             + weights.get("speed", 0) * speed_score
+            + phrase_bonus + arc_bonus
         )
 
-        final = composite * duration_penalty * artifact_penalty
+        final = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plag_penalty
 
         logger.debug(
             f"Scores: clap={clap_score:.3f} quality={quality_score:.3f} "
@@ -287,11 +318,15 @@ class ProductionRewardModel:
             f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
             f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
             f"speed={speed_score:.3f} div={diversity_score:.3f} "
-            f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} → {final:.3f}"
+            f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
+            f"fad_pen={fad_penalty:.3f} plag_pen={soft_plag_penalty:.3f} → {final:.3f}"
         )
 
         # Clear round cache after single-response scoring to prevent
-        # stale embeddings leaking across calls (NEW-02 fix).
+        # stale embeddings leaking across calls.
+        # Note: this means cross-miner plagiarism detection only works in
+        # score_batch(), not score_response(). This is by design — single
+        # response scoring lacks the batch context needed for cross-miner checks.
         self._plagiarism.clear_round_cache()
 
         return float(np.clip(final, 0.0, 1.0))
@@ -334,8 +369,12 @@ class ProductionRewardModel:
                 genre = getattr(synapse, "genre", "") or ""
                 challenge_id = getattr(synapse, "challenge_id", "") or ""
                 expected_lyrics = getattr(synapse, "lyrics", "") or ""
+                vocals_requested = getattr(synapse, "vocals_requested", False)
 
                 clap_score = self._clap.score(audio, sr, synapse.prompt)
+                # Capture CLAP embedding immediately — attribute verifier
+                # also calls CLAP and overwrites last_embedding
+                clap_emb_for_fad = self._clap.last_embedding
                 quality_scores = self._quality.score(audio, sr, genre=genre)
                 quality_score = self._quality.aggregate(quality_scores)
                 musicality_scores = self._musicality.score(audio, sr, genre=genre)
@@ -359,7 +398,7 @@ class ProductionRewardModel:
                 speed_score = self._speed_score(synapse)
                 diversity_score = diversity_scores[i]
 
-                # NEW scorers
+                # Naturalness & mix scorers
                 timbral_scores = self._timbral.score(audio, sr, genre=genre)
                 timbral_score = self._timbral.aggregate(timbral_scores)
                 vocal_lyrics_scores = self._vocal_lyrics.score(
@@ -378,8 +417,7 @@ class ProductionRewardModel:
                 soft_plag_penalty = self._plagiarism.get_soft_penalty(audio, sr, hotkey)
 
                 # FAD: update miner embedding and get penalty
-                clap_emb = self._clap.last_embedding
-                self._fad.update_miner_embedding(hotkey, clap_emb)
+                self._fad.update_miner_embedding(hotkey, clap_emb_for_fad)
                 fad_penalty = self._fad.get_fad_penalty(hotkey)
 
                 # Multi-scale weight adjustment
@@ -387,6 +425,21 @@ class ProductionRewardModel:
                 scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
                 weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+
+                # Preference weight: zero in bootstrap, auto-scale when trained
+                if self._preference.is_bootstrap:
+                    weights["preference"] = 0.0
+                else:
+                    weights["preference"] = self._preference.get_scaled_weight()
+
+                # Vocals-requested boost
+                if vocals_requested:
+                    weights["vocal_lyrics"] = weights.get("vocal_lyrics", 0) * 2.0
+                    weights["vocal"] = weights.get("vocal", 0) * 1.5
+
+                # Extract multi-scale bonuses before applying multipliers
+                phrase_bonus = scale_multipliers.pop("phrase_coherence_bonus", 0.0)
+                arc_bonus = scale_multipliers.pop("compositional_arc_bonus", 0.0)
 
                 # Apply multi-scale multipliers
                 for key in weights:
@@ -415,6 +468,7 @@ class ProductionRewardModel:
                     + weights.get("learned_mos", 0) * mos_score
                     + weights.get("diversity", 0) * diversity_score
                     + weights.get("speed", 0) * speed_score
+                    + phrase_bonus + arc_bonus
                 )
 
                 final = float(np.clip(
@@ -482,8 +536,8 @@ class ProductionRewardModel:
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
 
-            # Reject excessively long audio (>120s absolute limit)
-            if sr > 0 and len(audio) / sr > 120.0:
+            # Reject excessively long audio (>MAX_DURATION absolute limit)
+            if sr > 0 and len(audio) / sr > 180.0:
                 logger.warning(
                     f"Audio too long ({len(audio) / sr:.1f}s) — rejecting"
                 )
@@ -547,7 +601,13 @@ class ProductionRewardModel:
     @staticmethod
     def _speed_score(synapse: MusicGenerationSynapse) -> float:
         """
-        Speed score: 5s=1.0, 30s=0.3, >60s=0.0.
+        Duration-relative speed score.
+
+        Uses the ratio of generation_time / requested_duration instead of
+        absolute thresholds. This avoids penalizing longer generations:
+        - ratio <= 1.0 (real-time or faster): score 1.0
+        - ratio == 3.0: score 0.3
+        - ratio >= 6.0: score 0.0
 
         Uses validator-measured round-trip time (synapse.dendrite.process_time)
         instead of miner-reported generation_time_ms to prevent gaming.
@@ -563,21 +623,25 @@ class ProductionRewardModel:
         if gen_seconds is None:
             return 0.5  # no validator timing available — neutral
 
-        if gen_seconds <= SPEED_BEST_SECONDS:
+        # Duration-relative: compute generation-to-duration ratio
+        requested_duration = getattr(synapse, "duration_seconds", 10.0) or 10.0
+        ratio = gen_seconds / max(requested_duration, 1.0)
+
+        # Ratio-based scoring curve:
+        # ratio <= 1.0 (real-time or faster): 1.0
+        # ratio == 3.0: 0.3
+        # ratio >= 6.0: 0.0
+        if ratio <= 1.0:
             return 1.0
-        if gen_seconds >= SPEED_MAX_SECONDS:
+        if ratio >= 6.0:
             return 0.0
-        if gen_seconds <= SPEED_MID_SECONDS:
-            # Linear from 1.0 at BEST to MID_SCORE at MID
-            frac = (gen_seconds - SPEED_BEST_SECONDS) / (
-                SPEED_MID_SECONDS - SPEED_BEST_SECONDS
-            )
-            return 1.0 - frac * (1.0 - SPEED_MID_SCORE)
-        # Linear from MID_SCORE at MID to 0.0 at MAX
-        frac = (gen_seconds - SPEED_MID_SECONDS) / (
-            SPEED_MAX_SECONDS - SPEED_MID_SECONDS
-        )
-        return SPEED_MID_SCORE * (1.0 - frac)
+        if ratio <= 3.0:
+            # Linear from 1.0 at ratio=1.0 to 0.3 at ratio=3.0
+            frac = (ratio - 1.0) / 2.0
+            return 1.0 - frac * 0.7
+        # Linear from 0.3 at ratio=3.0 to 0.0 at ratio=6.0
+        frac = (ratio - 3.0) / 3.0
+        return 0.3 * (1.0 - frac)
 
     @staticmethod
     def _perturb_weights(challenge_id: str, validator_secret: str = "") -> dict[str, float]:
@@ -594,7 +658,10 @@ class ProductionRewardModel:
 
         Returns SCORING_WEIGHTS unchanged if perturbation is disabled.
         """
-        if WEIGHT_PERTURBATION <= 0.0 or not challenge_id:
+        if WEIGHT_PERTURBATION <= 0.0:
+            return dict(SCORING_WEIGHTS)
+        if not challenge_id:
+            logger.warning("Empty challenge_id — perturbation disabled for this round")
             return dict(SCORING_WEIGHTS)
 
         # Deterministic seed from challenge_id + validator secret

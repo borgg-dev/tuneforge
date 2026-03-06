@@ -212,8 +212,8 @@ def train(
     device = torch.device(device)
     model.to(device)
 
-    # Access raw logit layers (everything except final Sigmoid)
-    logit_layers = model.layers[:-1]
+    # Use the full model — no Sigmoid to strip (removed for Bradley-Terry compatibility)
+    logit_layers = model.layers
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = torch.nn.BCEWithLogitsLoss()

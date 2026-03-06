@@ -58,7 +58,7 @@ class ProductionQualityScorer:
 
             # Compute stereo quality before downmixing
             if raw_audio is not None and raw_audio.ndim == 2:
-                stereo_scores = self._stereo.score(raw_audio, sr)
+                stereo_scores = self._stereo.score(raw_audio, sr, genre=genre)
                 stereo_quality = self._stereo.aggregate(stereo_scores)
             else:
                 stereo_quality = 0.5  # Neutral default when no multichannel data

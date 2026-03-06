@@ -30,43 +30,49 @@ BURN_WEIGHT: float = _env_float("TF_BURN_WEIGHT", 0.0)
 # ---------------------------------------------------------------------------
 # Scoring composite weights  (must sum to 1.0)
 #
-# Quality is the primary driver; prompt adherence is secondary.
-# Quality is spread across fourteen independent scorers for gaming resistance.
-#   Prompt adherence:  clap                                                    = 20%
-#   Music quality:     quality + musicality + production + melody              = 54%
-#                      + neural_quality + preference + structural + vocal
-#                      + attribute + perceptual + neural_codec
+# Balanced across prompt adherence, composition, and production quality.
+# Quality is spread across 18 independent scorers for gaming resistance.
+#   Prompt adherence:  clap + attribute                                        = 24%
+#   Composition:       musicality + melody + structural                        = 21%
+#   Production/fidelity: production + neural_quality + vocal + quality         = 16%
+#   Naturalness/mix:   vocal_lyrics + timbral + mix_sep + learned_mos          = 20%
+#   Perceptual:        perceptual + neural_codec                               =  2%
+#   Preference:        preference                                      = 0% (bootstrap) / 2-20% (trained)
 #   Other:             diversity + speed                                       = 10%
-#   Verification:      attribute                                               = 10%
-#   Perceptual:        perceptual + neural_codec                               =  6%
+#
+# NOTE: preference weight is zeroed in bootstrap mode (no trained model).
+# Its 7% base weight is redistributed to other scorers via renormalization.
 #
 # Artifact detection is applied as a penalty multiplier (not in weights).
+# Vocals-requested boost: doubles vocal_lyrics weight when vocals are
+# explicitly requested, then renormalizes.
 # ---------------------------------------------------------------------------
 SCORING_WEIGHTS: dict[str, float] = {
-    # Prompt adherence (15%)
+    # Prompt adherence (24% — CLAP kept at 15% to avoid amplifying gaming
+    # risk; attribute boosted for concrete, less-gameable prompt checks)
     "clap": _env_float("TF_WEIGHT_CLAP", 0.15),
-    # Core music quality (42%)
-    "quality": _env_float("TF_WEIGHT_QUALITY", 0.03),
-    "musicality": _env_float("TF_WEIGHT_MUSICALITY", 0.08),
+    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.09),
+    # Composition (21%) + Production/fidelity (16%) + Preference (7% base)
+    "musicality": _env_float("TF_WEIGHT_MUSICALITY", 0.09),
     "production": _env_float("TF_WEIGHT_PRODUCTION", 0.05),
-    "melody": _env_float("TF_WEIGHT_MELODY", 0.05),
-    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.06),
-    "preference": _env_float("TF_WEIGHT_PREFERENCE", 0.06),
-    "structural": _env_float("TF_WEIGHT_STRUCTURAL", 0.05),
+    "melody": _env_float("TF_WEIGHT_MELODY", 0.06),
+    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.05),
+    "preference": _env_float("TF_WEIGHT_PREFERENCE", 0.07),
+    "structural": _env_float("TF_WEIGHT_STRUCTURAL", 0.06),
     "vocal": _env_float("TF_WEIGHT_VOCAL", 0.04),
-    # Verification (8%)
-    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.08),
-    # Perceptual quality (4%)
-    "perceptual": _env_float("TF_WEIGHT_PERCEPTUAL", 0.02),
-    "neural_codec": _env_float("TF_WEIGHT_NEURAL_CODEC", 0.02),
-    # NEW scorers addressing audit gaps (20%)
-    "timbral": _env_float("TF_WEIGHT_TIMBRAL", 0.07),
-    "vocal_lyrics": _env_float("TF_WEIGHT_VOCAL_LYRICS", 0.05),
+    "quality": _env_float("TF_WEIGHT_QUALITY", 0.02),
+    # Perceptual quality (2%)
+    "perceptual": _env_float("TF_WEIGHT_PERCEPTUAL", 0.01),
+    "neural_codec": _env_float("TF_WEIGHT_NEURAL_CODEC", 0.01),
+    # Naturalness & mix (20%)
+    "timbral": _env_float("TF_WEIGHT_TIMBRAL", 0.05),
+    "vocal_lyrics": _env_float("TF_WEIGHT_VOCAL_LYRICS", 0.08),
     "mix_separation": _env_float("TF_WEIGHT_MIX_SEPARATION", 0.04),
-    "learned_mos": _env_float("TF_WEIGHT_LEARNED_MOS", 0.04),
-    # Other (11%)
+    "learned_mos": _env_float("TF_WEIGHT_LEARNED_MOS", 0.03),
+    # Other (10% — diversity kept at 8% for anti-convergence defense;
+    # speed reduced to 2% since it's now duration-relative)
     "diversity": _env_float("TF_WEIGHT_DIVERSITY", 0.08),
-    "speed": _env_float("TF_WEIGHT_SPEED", 0.03),
+    "speed": _env_float("TF_WEIGHT_SPEED", 0.02),
 }
 
 # ---------------------------------------------------------------------------
@@ -108,7 +114,7 @@ DURATION_TOLERANCE_MAX: float = _env_float("TF_DURATION_TOLERANCE_MAX", 0.50)
 # ---------------------------------------------------------------------------
 # Timing / intervals (seconds or blocks)
 # ---------------------------------------------------------------------------
-GENERATION_TIMEOUT: int = _env_int("TF_GENERATION_TIMEOUT", 120)
+GENERATION_TIMEOUT: int = _env_int("TF_GENERATION_TIMEOUT", 300)
 VALIDATION_INTERVAL: int = _env_int("TF_VALIDATION_INTERVAL", 300)
 WEIGHT_UPDATE_INTERVAL: int = _env_int("TF_WEIGHT_UPDATE_INTERVAL", 115)
 METAGRAPH_SYNC_INTERVAL: int = _env_int("TF_METAGRAPH_SYNC_INTERVAL", 1200)
@@ -139,7 +145,7 @@ CLAP_SAMPLE_RATE: int = _env_int("TF_CLAP_SAMPLE_RATE", 48000)
 # Calibrated on laion/clap-htsat-unfused with MusicGen outputs:
 #   unrelated audio ~0.0, weak match ~0.15, good match ~0.40-0.60.
 CLAP_SIM_FLOOR: float = _env_float("TF_CLAP_SIM_FLOOR", 0.15)
-CLAP_SIM_CEILING: float = _env_float("TF_CLAP_SIM_CEILING", 0.60)
+CLAP_SIM_CEILING: float = _env_float("TF_CLAP_SIM_CEILING", 0.75)
 
 # ---------------------------------------------------------------------------
 # MERT model (neural audio quality)
@@ -205,7 +211,7 @@ ENCODEC_MODEL: str = _env_str("TF_ENCODEC_MODEL", "facebook/encodec_24khz")
 # Preference weight auto-scaling
 # ---------------------------------------------------------------------------
 PREFERENCE_WEIGHT_MIN: float = _env_float("TF_PREFERENCE_WEIGHT_MIN", 0.02)
-PREFERENCE_WEIGHT_MAX: float = _env_float("TF_PREFERENCE_WEIGHT_MAX", 0.10)
+PREFERENCE_WEIGHT_MAX: float = _env_float("TF_PREFERENCE_WEIGHT_MAX", 0.20)
 PREFERENCE_ACCURACY_MIN: float = _env_float("TF_PREFERENCE_ACCURACY_MIN", 0.55)
 PREFERENCE_ACCURACY_MAX: float = _env_float("TF_PREFERENCE_ACCURACY_MAX", 0.80)
 
@@ -225,7 +231,21 @@ ANNOTATOR_WEIGHTED_THRESHOLD: float = _env_float("TF_ANNOTATOR_WEIGHTED_THRESHOL
 # ---------------------------------------------------------------------------
 # Validator perturbation secret
 # A private nonce used to seed weight perturbation. MUST NOT be shared with
-# miners. Each validator should set a unique value. If empty, falls back to
-# using only challenge_id (less secure but backwards compatible).
+# miners. Each validator should set a unique value. If empty, a random secret
+# is auto-generated at startup (ephemeral — changes on restart).
 # ---------------------------------------------------------------------------
-VALIDATOR_PERTURBATION_SECRET: str = _env_str("TF_VALIDATOR_PERTURBATION_SECRET", "")
+def _default_perturbation_secret() -> str:
+    """Auto-generate a random perturbation secret if none is configured."""
+    configured = os.environ.get("TF_VALIDATOR_PERTURBATION_SECRET", "")
+    if configured:
+        return configured
+    import secrets
+    generated = secrets.token_hex(32)
+    import logging
+    logging.getLogger("tuneforge.config").warning(
+        "TF_VALIDATOR_PERTURBATION_SECRET not set — auto-generated ephemeral secret. "
+        "Set this env var for consistent scoring across restarts."
+    )
+    return generated
+
+VALIDATOR_PERTURBATION_SECRET: str = _default_perturbation_secret()

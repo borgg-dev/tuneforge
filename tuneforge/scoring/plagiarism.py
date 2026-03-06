@@ -53,6 +53,8 @@ class PlagiarismDetector:
         self._miner_canonical_history: dict[str, deque] = defaultdict(
             lambda: deque(maxlen=history_maxlen)
         )
+        # Cached soft penalty from check() — computed BEFORE appending to history
+        self._last_soft_penalty: dict[str, float] = {}
 
         if reference_embeddings_path and Path(reference_embeddings_path).exists():
             try:
@@ -150,6 +152,11 @@ class PlagiarismDetector:
                     )
                     return True, sim
 
+        # Compute soft penalty BEFORE appending to history (avoids self-comparison)
+        self._last_soft_penalty[miner_hotkey] = self._compute_soft_penalty(
+            embedding, miner_hotkey,
+        )
+
         # Store embedding for future checks
         self._round_embeddings[f"{challenge_id}:{miner_hotkey}"] = embedding
         self._miner_history[miner_hotkey].append(embedding)
@@ -166,36 +173,52 @@ class PlagiarismDetector:
     ) -> float:
         """Get soft plagiarism penalty multiplier.
 
-        Returns 1.0 (no penalty) if similarity is below soft threshold.
-        Returns 0.3 if similarity is in the soft zone [soft_threshold, hard_threshold).
-        Hard plagiarism is handled by check() returning is_plagiarized=True.
+        Returns the cached value computed during check() — this avoids the
+        self-comparison bug where the current submission would find sim=1.0
+        against itself in the history.
+
+        Falls back to recomputation only if check() was not called first.
         """
+        if miner_hotkey in self._last_soft_penalty:
+            return self._last_soft_penalty.pop(miner_hotkey)
+
+        # Fallback: recompute (should not normally reach here)
         if self._clap is None:
             return 1.0
-
         embedding = self._clap.get_audio_embedding(audio, sr)
         if embedding is None:
             return 1.0
-
         norm = np.linalg.norm(embedding)
         if norm < 1e-8:
             return 1.0
         embedding = embedding / norm
+        return self._compute_soft_penalty(embedding, miner_hotkey)
 
+    def _compute_soft_penalty(
+        self,
+        embedding: np.ndarray,
+        miner_hotkey: str,
+    ) -> float:
+        """Compute soft plagiarism penalty from embedding vs history.
+
+        Returns 1.0 (no penalty) if similarity is below soft threshold.
+        Returns a smooth penalty in the soft zone [soft_threshold, hard_threshold].
+        """
         max_sim = 0.0
         for hist_emb in self._miner_history[miner_hotkey]:
             sim = float(np.dot(embedding, hist_emb))
             max_sim = max(max_sim, sim)
 
         if max_sim >= self._soft_threshold:
-            # Soft penalty zone: linear interpolation from 1.0 at soft_threshold
-            # to 0.3 at hard_threshold
+            # Smooth penalty: 1.0 at soft_threshold → 0.05 at hard_threshold
             if max_sim >= self._self_threshold:
-                return 0.3  # should not reach here (check() catches it)
+                return 0.05  # should not reach here (check() catches it)
             t = (max_sim - self._soft_threshold) / (
                 self._self_threshold - self._soft_threshold + 1e-8
             )
-            return 1.0 - t * 0.7  # 1.0 -> 0.3
+            # Cosine interpolation: smooth start and end
+            smooth_t = 0.5 * (1.0 - float(np.cos(np.pi * t)))
+            return 1.0 - smooth_t * 0.95  # 1.0 -> 0.05
 
         return 1.0
 

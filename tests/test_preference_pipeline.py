@@ -176,11 +176,10 @@ class TestTrainingLoop:
             state = raw["state_dict"] if isinstance(raw, dict) and "state_dict" in raw else raw
             head.load_state_dict(state)
 
-            # Verify forward pass works
+            # Verify forward pass works (output is raw logit, not bounded)
             dummy = torch.randn(1, 512)
             output = head(dummy)
             assert output.shape == (1, 1)
-            assert 0.0 <= output.item() <= 1.0
         finally:
             if os.path.exists(out_path):
                 os.unlink(out_path)

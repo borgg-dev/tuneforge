@@ -44,6 +44,10 @@ _SHORT_MULTIPLIERS: dict[str, float] = {
     "preference": 1.0,
     "diversity": 1.0,
     "attribute": 1.0,
+    "timbral": 1.2,
+    "vocal_lyrics": 0.8,
+    "mix_separation": 1.2,
+    "learned_mos": 1.3,
 }
 
 _MEDIUM_MULTIPLIERS: dict[str, float] = {
@@ -61,6 +65,10 @@ _MEDIUM_MULTIPLIERS: dict[str, float] = {
     "preference": 1.0,
     "diversity": 1.0,
     "attribute": 1.0,
+    "timbral": 1.0,
+    "vocal_lyrics": 1.0,
+    "mix_separation": 1.0,
+    "learned_mos": 1.0,
 }
 
 _LONG_MULTIPLIERS: dict[str, float] = {
@@ -78,6 +86,10 @@ _LONG_MULTIPLIERS: dict[str, float] = {
     "preference": 1.0,
     "diversity": 1.0,
     "attribute": 1.1,
+    "timbral": 0.9,
+    "vocal_lyrics": 1.2,
+    "mix_separation": 0.8,
+    "learned_mos": 0.9,
 }
 
 # Maximum bonuses for long-form compositional analysis

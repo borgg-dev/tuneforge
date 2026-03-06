@@ -38,6 +38,8 @@ _STATE_VERSION = 1
 
 _DIFFICULTY_ANCHORS: list[tuple[float, dict[str, float]]] = [
     # (ema_threshold, {param: value, ...})
+    # Finer-grained anchors in the 0.35-0.60 range where most networks
+    # spend the majority of their time, preventing comfortable plateaus.
     (0.00, {
         "min_duration": 5.0,
         "max_duration": 15.0,
@@ -45,33 +47,68 @@ _DIFFICULTY_ANCHORS: list[tuple[float, dict[str, float]]] = [
         "attribute_requirements": 0.0,  # none required
         "prompt_complexity_level": 0.0,
     }),
-    (0.30, {
+    (0.25, {
         "min_duration": 8.0,
-        "max_duration": 30.0,
+        "max_duration": 25.0,
         "quality_floor": 0.42,
-        "attribute_requirements": 0.3,
+        "attribute_requirements": 0.2,
+        "prompt_complexity_level": 0.2,
+    }),
+    (0.35, {
+        "min_duration": 10.0,
+        "max_duration": 35.0,
+        "quality_floor": 0.44,
+        "attribute_requirements": 0.35,
         "prompt_complexity_level": 0.3,
+    }),
+    (0.42, {
+        "min_duration": 12.0,
+        "max_duration": 45.0,
+        "quality_floor": 0.46,
+        "attribute_requirements": 0.45,
+        "prompt_complexity_level": 0.4,
     }),
     (0.50, {
         "min_duration": 15.0,
         "max_duration": 60.0,
-        "quality_floor": 0.47,
-        "attribute_requirements": 0.6,
+        "quality_floor": 0.48,
+        "attribute_requirements": 0.55,
         "prompt_complexity_level": 0.5,
     }),
-    (0.65, {
-        "min_duration": 25.0,
-        "max_duration": 120.0,
+    (0.55, {
+        "min_duration": 18.0,
+        "max_duration": 75.0,
+        "quality_floor": 0.50,
+        "attribute_requirements": 0.65,
+        "prompt_complexity_level": 0.55,
+    }),
+    (0.60, {
+        "min_duration": 22.0,
+        "max_duration": 90.0,
         "quality_floor": 0.52,
+        "attribute_requirements": 0.7,
+        "prompt_complexity_level": 0.6,
+    }),
+    (0.70, {
+        "min_duration": 30.0,
+        "max_duration": 120.0,
+        "quality_floor": 0.54,
         "attribute_requirements": 0.8,
         "prompt_complexity_level": 0.7,
     }),
     (0.80, {
         "min_duration": 40.0,
-        "max_duration": 180.0,
+        "max_duration": 150.0,
         "quality_floor": 0.57,
+        "attribute_requirements": 0.9,
+        "prompt_complexity_level": 0.85,
+    }),
+    (0.90, {
+        "min_duration": 50.0,
+        "max_duration": 180.0,
+        "quality_floor": 0.59,
         "attribute_requirements": 1.0,
-        "prompt_complexity_level": 0.9,
+        "prompt_complexity_level": 0.95,
     }),
     (1.00, {
         "min_duration": 60.0,

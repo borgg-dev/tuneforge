@@ -90,9 +90,10 @@ class VocalLyricsScorer:
 
             # --- Edge-case guards ---
             if np.max(np.abs(audio)) < self._SILENCE_THRESHOLD:
-                return dict(_NEUTRAL)
+                # Silence when vocals are expected — penalize
+                return {k: 0.1 for k in VOCAL_LYRICS_WEIGHTS}
             if len(audio) / sr < self._MIN_DURATION:
-                return dict(_NEUTRAL)
+                return {k: 0.1 for k in VOCAL_LYRICS_WEIGHTS}
 
             # Pre-compute HPSS harmonic signal (shared across metrics)
             harmonic = librosa.effects.hpss(audio)[0]

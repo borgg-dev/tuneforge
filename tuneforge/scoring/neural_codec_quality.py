@@ -18,6 +18,8 @@ class NeuralCodecQualityScorer:
         "codec_naturalness": 0.40,
     }
 
+    _LOAD_FAILED = "LOAD_FAILED"
+
     def __init__(self, model_name: str = "facebook/encodec_24khz") -> None:
         self._model_name = model_name
         self._model = None
@@ -25,6 +27,8 @@ class NeuralCodecQualityScorer:
 
     def _load(self) -> bool:
         """Lazy-load EnCodec model. Returns True on success."""
+        if self._model == self._LOAD_FAILED:
+            return False
         if self._model is not None:
             return True
         try:
@@ -36,7 +40,8 @@ class NeuralCodecQualityScorer:
             logger.info("Loaded EnCodec model: {}", self._model_name)
             return True
         except Exception as exc:
-            logger.warning("Failed to load EnCodec model: {}", exc)
+            logger.warning("Failed to load EnCodec model (permanent): {}", exc)
+            self._model = self._LOAD_FAILED
             return False
 
     def score(self, audio: np.ndarray, sr: int, genre: str = "") -> dict[str, float]:

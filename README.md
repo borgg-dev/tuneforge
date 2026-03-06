@@ -14,7 +14,7 @@
 
 ---
 
-TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across 11 quality dimensions. The subnet supports MusicGen and Stable Audio backends, with an EMA-based leaderboard that translates performance into on-chain weight and TAO emissions.
+TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **4 penalty multipliers**. The subnet supports MusicGen and Stable Audio backends, with an EMA-based leaderboard that translates performance into on-chain weight and TAO emissions.
 
 **Testnet netuid: 234** | **Mainnet: TBD**
 
@@ -25,6 +25,7 @@ TuneForge is a Bittensor subnet that incentivizes decentralized AI music generat
 - [Scoring System](#scoring-system)
 - [Reward Mechanism](#reward-mechanism)
 - [Anti-Gaming](#anti-gaming)
+- [Preference Model & Crowd Annotations](#preference-model--crowd-annotations)
 - [Configuration Reference](#configuration-reference)
 - [Project Structure](#project-structure)
 - [Roadmap](#roadmap)
@@ -37,7 +38,8 @@ graph TB
     subgraph Validators
         V[Validator Node]
         CG[Challenge Generator<br/>100k+ prompt combos]
-        SC[Scoring Pipeline<br/>11 dimensions]
+        SC[Scoring Pipeline<br/>18 scorers + 4 penalties]
+        MS[Multi-Scale Evaluator]
         LB[EMA Leaderboard]
         WS[Weight Setter]
     end
@@ -63,7 +65,8 @@ graph TB
     M2 -->|axon response| SC
     M3 -->|axon response| SC
     CG --> V
-    SC --> LB
+    SC --> MS
+    MS --> LB
     LB --> WS
     WS -->|set_weights| CH
 
@@ -72,11 +75,11 @@ graph TB
     V -->|organic fan-out| M2
 ```
 
-**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 11 quality signals, maintain an EMA leaderboard, apply steepening, and submit weights on-chain.
+**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with steepening, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen small/medium/large or Stable Audio), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO.
 
-**Organic Generation** (optional) allows real user requests from the SaaS backend to flow through the validator. The validator fans out organic prompts to the top 10 miners by EMA, scores all responses with the same 11-signal pipeline, updates the EMA leaderboard, and returns the best results to the customer. Organic and challenge scoring coexist on the same event loop and feed the same EMA.
+**Organic Generation** (optional) allows real user requests from the SaaS backend to flow through the validator. The validator fans out organic prompts to the top 10 miners by EMA, scores all responses with the same pipeline, updates the EMA leaderboard, and returns the best results to the customer. Organic and challenge scoring coexist on the same event loop and feed the same EMA.
 
 ## Quick Start
 
@@ -158,59 +161,97 @@ For the full architecture reference and SaaS layer setup, see [docs/setup.md](do
 
 ## Scoring System
 
-Every validation round, miners are scored across 11 weighted signals. The weights are configurable via environment variables and must sum to 1.0.
+Every validation round, miners are scored across **18 weighted signals** grouped into five categories. Weights are configurable via environment variables and must sum to 1.0.
 
 ### Scoring Signals
 
-| Signal | Weight | Env Variable | Category |
-|--------|--------|--------------|----------|
-| CLAP Adherence | 30% | `TF_WEIGHT_CLAP` | Prompt Adherence |
-| Musicality | 10% | `TF_WEIGHT_MUSICALITY` | Music Quality |
-| Neural Quality (MERT) | 10% | `TF_WEIGHT_NEURAL_QUALITY` | Music Quality |
-| Production Quality | 8% | `TF_WEIGHT_PRODUCTION` | Music Quality |
-| Melody Coherence | 7% | `TF_WEIGHT_MELODY` | Music Quality |
-| Structural Completeness | 7% | `TF_WEIGHT_STRUCTURAL` | Music Quality |
-| Audio Quality | 6% | `TF_WEIGHT_QUALITY` | Music Quality |
-| Preference Model | 6% | `TF_WEIGHT_PREFERENCE` | Music Quality |
-| Vocal Quality | 6% | `TF_WEIGHT_VOCAL` | Music Quality |
-| Diversity | 5% | `TF_WEIGHT_DIVERSITY` | Other |
-| Speed | 5% | `TF_WEIGHT_SPEED` | Other |
-| Attribute Verification | 0% | `TF_WEIGHT_ATTRIBUTE` | Other (opt-in) |
+| Signal | Weight | Category |
+|--------|--------|----------|
+| **CLAP Adherence** | 15% | Prompt Adherence |
+| **Attribute Verification** | 9% | Prompt Adherence |
+| **Musicality** | 9% | Composition |
+| **Melody Coherence** | 6% | Composition |
+| **Structural Completeness** | 6% | Composition |
+| **Vocal & Lyrics** | 8% | Naturalness & Mix |
+| **Timbral Naturalness** | 5% | Naturalness & Mix |
+| **Mix Separation** | 4% | Naturalness & Mix |
+| **Learned MOS** | 3% | Naturalness & Mix |
+| **Preference Model** | 7% | Production & Fidelity |
+| **Neural Quality (MERT)** | 5% | Production & Fidelity |
+| **Production Quality** | 5% | Production & Fidelity |
+| **Vocal Quality** | 4% | Production & Fidelity |
+| **Audio Quality** | 2% | Production & Fidelity |
+| **Perceptual Quality** | 1% | Perceptual |
+| **Neural Codec Quality** | 1% | Perceptual |
+| **Diversity** | 8% | Other |
+| **Speed** | 2% | Other |
 
-**CLAP Adherence** (30%) dominates the scoring: it measures how well the generated audio matches the text prompt using CLAP text-audio cosine similarity, mapped from a floor of 0.15 to a ceiling of 0.60.
+**CLAP Adherence** (15%) measures how well the generated audio matches the text prompt using `laion/larger_clap_music` text-audio cosine similarity, mapped from a floor of 0.15 to a ceiling of 0.75.
 
-**Neural Quality** uses the MERT model (`m-a-p/MERT-v1-95M`) to evaluate learned audio representations. **Musicality** analyzes pitch stability, harmonic consonance, and rhythmic regularity. **Production Quality** checks spectral balance, LUFS loudness, and dynamic range. The remaining signals cover melody, structure, audio fidelity, vocal clarity, output diversity, and generation speed.
+**Neural Quality** uses the MERT model (`m-a-p/MERT-v1-95M`) to evaluate temporal coherence, activation strength, layer agreement, and structural periodicity. **Musicality** analyzes pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement sophistication. **Production Quality** checks spectral balance, frequency fullness, loudness consistency, dynamic expressiveness, and stereo quality.
+
+**Vocal & Lyrics** uses Whisper-based lyrics intelligibility scoring alongside vocal clarity, pitch quality, and expressiveness. **Timbral Naturalness** evaluates spectral envelope naturalness, harmonic decay, and transient quality. **Mix Separation** measures spectral clarity, frequency masking, spatial depth, and low-end/mid-range definition. **Learned MOS** provides multi-resolution perceptual quality estimation.
+
+**Attribute Verification** checks prompt compliance (tempo, key, instruments) using librosa analysis and CLAP zero-shot classification. **Diversity** tracks CLAP embedding variety across a miner's recent 50 submissions with a population-level diversity bonus. **Speed** uses a duration-relative curve (see below).
+
+**Preference Model** starts in bootstrap mode (returning neutral 0.5) and is progressively trained from crowd annotations via Bradley-Terry pairwise loss. Its weight auto-scales between 2% and 20% based on model validation accuracy.
 
 ### Penalties
 
-Penalties are applied as multipliers on the final score, not as weighted components. They exist to enforce hard constraints and detect gaming.
+Penalties are applied as multipliers on the final composite score, not as weighted components:
+
+```
+final_score = composite * duration_penalty * artifact_penalty * fad_penalty * soft_plagiarism_penalty
+```
 
 | Penalty | Trigger | Effect |
 |---------|---------|--------|
-| Silence | Audio RMS below 0.01 | Hard zero -- final score = 0.0 |
-| Timeout | Generation exceeds 120s (`TF_GENERATION_TIMEOUT`) | Hard zero -- final score = 0.0 |
-| Plagiarism | Self-similarity > 0.80 via fingerprinting | Hard zero -- final score = 0.0 |
-| Duration | Audio duration off-target by >20% | Linear penalty (1.0 at 20% to 0.0 at 50%) |
-| Artifacts | Spectral discontinuities, clipping, loops | Multiplier (0.0 - 1.0) on final score |
+| **Silence** | Audio RMS below 0.01 | Hard zero (score = 0.0) |
+| **Timeout** | Round-trip exceeds 300s | Hard zero (score = 0.0) |
+| **Hard Plagiarism** | Self-similarity > 0.72, cross-miner > 0.70 | Hard zero (score = 0.0) |
+| **Duration** | Audio duration off-target by >20% | Linear penalty (1.0 at 20% to 0.0 at 50%) |
+| **Artifacts** | Spectral discontinuities, clipping, loops | Multiplier (0.0 - 1.0) |
+| **Soft Plagiarism** | Self-similarity in [0.65, 0.72] | Cosine-smoothed curve (1.0 to 0.05) |
+| **FAD** | Per-miner Frechet Audio Distance divergence | Sigmoid penalty (floor 0.5) |
 
-### Speed Scoring Curve
+### Speed Scoring
 
-Speed is scored on a nonlinear curve:
-- 5s or faster = 1.0
-- 30s = 0.3
-- 60s or slower = 0.0
+Speed is scored using a **duration-relative curve** based on the ratio of generation time to requested duration:
+
+- Ratio <= 1.0 (real-time or faster) = **1.0**
+- Ratio = 3.0 = **0.3**
+- Ratio >= 6.0 = **0.0**
+
+This prevents penalizing longer music -- a 60-second track that takes 60 seconds to generate scores the same as a 10-second track generated in 10 seconds.
+
+### Multi-Scale Evaluation
+
+Scoring weights are automatically adjusted based on audio duration:
+
+| Duration | Emphasis | Bonuses |
+|----------|----------|---------|
+| **Short** (< 10s) | Production quality, audio fidelity, timbral quality | None |
+| **Medium** (10-30s) | Balanced (baseline weights) | None |
+| **Long** (>= 30s) | Structure, melody, composition, vocals | Phrase coherence (+0.05), compositional arc (+0.05) |
+
+Long-form submissions can earn up to +0.10 bonus for demonstrating phrase-level structure (verse-chorus patterns) and dynamic compositional arcs (rise-peak-fall energy contours).
+
+### Genre-Aware Scoring
+
+The scoring pipeline adjusts quality targets based on detected genre across 9 genre families (electronic, rock, classical-cinematic, ambient, hip-hop, jazz-blues, folk-acoustic, groove-soul, pop). Each family defines its own targets for dynamic range, onset density, rhythmic groove, spectral balance, loudness, and more.
 
 ## Reward Mechanism
 
 ```mermaid
 graph LR
     A[Challenge] --> B[Miner Responses]
-    B --> C[11-Signal Scoring]
-    C --> D[Penalty Multipliers]
-    D --> E[Round Score]
-    E --> F[EMA Update]
-    F --> G[Steepening]
-    G --> H[On-Chain Weights]
+    B --> C[18-Signal Scoring]
+    C --> D[Multi-Scale Adjust]
+    D --> E[4 Penalty Multipliers]
+    E --> F[Round Score]
+    F --> G[EMA Update]
+    G --> H[Steepening]
+    H --> I[On-Chain Weights]
 ```
 
 ### EMA Leaderboard
@@ -221,16 +262,16 @@ Each miner's long-term performance is tracked via an exponential moving average:
 ema_new = 0.2 * round_score + 0.8 * ema_old
 ```
 
-New miners start with EMA = 0.0 and ramp up gradually through the EMA formula. A miner consistently scoring 0.7 takes ~8 rounds (~40 minutes) to cross the steepening baseline and begin receiving weight. This cold-start behaviour prevents a single good round from granting immediate ranking.
+New miners start with EMA = 0.25 and ramp up gradually. A miner consistently scoring 0.7 takes ~8 rounds (~40 minutes) to cross the steepening baseline and begin receiving weight. This cold-start behaviour prevents a single good round from granting immediate ranking.
 
-The EMA alpha of 0.2 (`TF_EMA_ALPHA`) balances responsiveness to recent performance with stability against outlier rounds.
+The EMA alpha of 0.2 (`TF_EMA_ALPHA`) balances responsiveness to recent performance with stability against outlier rounds. EMA state is persisted to disk every 5 blocks.
 
 ### Steepening
 
 Raw EMA scores are transformed before weight submission to reward top performers disproportionately:
 
-1. Miners with EMA below the baseline of 0.50 (`TF_STEEPEN_BASELINE`) receive zero weight.
-2. Miners above baseline are mapped: `weight = ((ema - 0.50) / 0.50) ^ 2.0`
+1. Miners with EMA below the baseline of 0.45 (`TF_STEEPEN_BASELINE`) receive zero weight (soft sigmoid floor).
+2. Miners above baseline are mapped: `weight = ((ema - 0.45) / 0.55) ^ 2.0`
 
 The power of 2.0 (`TF_STEEPEN_POWER`) creates a convex curve that concentrates emissions on consistently high-performing miners.
 
@@ -240,17 +281,46 @@ Weights are submitted on-chain every 115 blocks (`TF_WEIGHT_UPDATE_INTERVAL`). V
 
 ## Anti-Gaming
 
-TuneForge employs multiple mechanisms to prevent miners from gaming the scoring system:
+TuneForge employs multiple layered mechanisms to prevent miners from gaming the scoring system:
 
-**Weight Perturbation.** Each round, scoring weights are perturbed by up to 20% (`TF_WEIGHT_PERTURBATION=0.20`), seeded deterministically by the challenge ID. This prevents miners from over-optimizing for a fixed weight distribution while keeping scoring reproducible across validators.
+**Weight Perturbation.** Each round, scoring weights are perturbed by up to 30% (`TF_WEIGHT_PERTURBATION=0.30`), seeded deterministically by `SHA256(challenge_id + validator_secret)`. The validator secret (`TF_VALIDATOR_PERTURBATION_SECRET`) is a private nonce that is **never transmitted to miners**, making it impossible for miners to reconstruct the exact perturbed weights from open-source code.
 
-**Diversity Tracking.** CLAP embeddings of each miner's recent outputs are tracked. Miners that produce nearly identical outputs across rounds are penalized through the diversity signal (5% weight).
+**Scorer Dropout.** Each non-zero scorer has a 10% independent probability of being zeroed per round (`TF_SCORER_DROPOUT_RATE=0.10`), using the same secret-seeded RNG. This prevents miners from consistently exploiting any single scorer.
 
-**Plagiarism Detection.** Audio fingerprinting detects self-similarity above a threshold of 0.80 (`TF_SELF_PLAGIARISM_THRESHOLD`). Miners that replay or trivially modify previous outputs receive a hard zero for the round.
+**Plagiarism Detection.** Three-layer detection with canonical-form comparison:
+- **Self-plagiarism**: 50-entry history per miner, hard zero at similarity > 0.72
+- **Cross-miner**: Within-round comparison, hard zero at similarity > 0.70
+- **Reference DB**: Against known material, threshold 0.85
+- **Canonical-form**: Audio is pitch-normalized (to C) and tempo-normalized (to 120 BPM) before embedding comparison, catching pitch-shifted or time-stretched plagiarism attempts
+- **Soft penalty zone**: Similarity in [0.65, 0.72] applies a smooth cosine penalty curve from 1.0 to 0.05
 
-**Hard Penalties.** Silence detection (RMS < 0.01), timeout enforcement (120s), and artifact detection (clipping, spectral discontinuities, looping) act as binary or continuous multipliers that cannot be circumvented by high signal scores.
+**FAD Penalty.** Per-miner Frechet Audio Distance measures how far a miner's output distribution diverges from real music statistics. Uses a sigmoid penalty curve with a floor of 0.5.
+
+**Diversity Tracking.** CLAP embeddings of each miner's recent 50 outputs are tracked. Diversity scoring combines intra-miner variety (70%) with population-level diversity bonus (30%), encouraging both self-diversity and differentiation from other miners. The DiversityScorer shares the CLAP model instance with the main scorer to save ~600MB GPU memory.
+
+**Hard Penalties.** Silence detection (RMS < 0.01), timeout enforcement (300s), payload validation (20MB max, 180s max duration), and artifact detection (clipping, spectral discontinuities, looping) act as binary or continuous multipliers that cannot be circumvented by high signal scores.
 
 **EMA Smoothing.** The alpha of 0.2 means a single exceptional round cannot dramatically change a miner's standing. Consistent quality over time is required.
+
+## Preference Model & Crowd Annotations
+
+The preference signal uses a trained MLP that predicts human preferences from CLAP embeddings (512-dim) or dual CLAP+MERT embeddings (1280-dim).
+
+### Training Pipeline
+
+1. **Annotation** -- A/B comparisons collected via the crowd annotation system with majority vote at quorum 5
+2. **Embedding Cache** -- CLAP embeddings pre-computed for all annotated audio (`tools/build_embedding_cache.py`)
+3. **Training** -- Bradley-Terry pairwise loss: `BCEWithLogitsLoss(logit_preferred - logit_rejected, target=1)` (`tools/train_preference.py`)
+4. **Deployment** -- Checkpoint uploaded to DB; validator auto-loads hourly
+5. **Auto-scaling** -- Weight scales linearly from 2% (accuracy 0.55) to 20% (accuracy 0.80)
+
+In bootstrap mode (no trained checkpoint), the preference scorer returns a neutral 0.5 for all inputs and its weight is effectively zero.
+
+### Quality Control
+
+- **Gold standard tasks** with known answers validate annotator reliability
+- **Annotator reliability tracking** per user with flagging for low-quality annotators
+- **Active learning** selects uncertain/high-impact pairs for annotation priority
 
 ## Configuration Reference
 
@@ -308,52 +378,79 @@ All configuration is done through environment variables with the `TF_` prefix. V
 
 ### Scoring Weights
 
-All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table above for the full list of `TF_WEIGHT_*` variables and their defaults.
+All weights must sum to 1.0. Each scorer has a corresponding `TF_WEIGHT_<NAME>` env var:
+
+| Variable | Default |
+|----------|---------|
+| `TF_WEIGHT_CLAP` | 0.15 |
+| `TF_WEIGHT_ATTRIBUTE` | 0.09 |
+| `TF_WEIGHT_MUSICALITY` | 0.09 |
+| `TF_WEIGHT_VOCAL_LYRICS` | 0.08 |
+| `TF_WEIGHT_DIVERSITY` | 0.08 |
+| `TF_WEIGHT_PREFERENCE` | 0.07 |
+| `TF_WEIGHT_MELODY` | 0.06 |
+| `TF_WEIGHT_STRUCTURAL` | 0.06 |
+| `TF_WEIGHT_PRODUCTION` | 0.05 |
+| `TF_WEIGHT_NEURAL_QUALITY` | 0.05 |
+| `TF_WEIGHT_TIMBRAL` | 0.05 |
+| `TF_WEIGHT_VOCAL` | 0.04 |
+| `TF_WEIGHT_MIX_SEPARATION` | 0.04 |
+| `TF_WEIGHT_LEARNED_MOS` | 0.03 |
+| `TF_WEIGHT_QUALITY` | 0.02 |
+| `TF_WEIGHT_SPEED` | 0.02 |
+| `TF_WEIGHT_PERCEPTUAL` | 0.01 |
+| `TF_WEIGHT_NEURAL_CODEC` | 0.01 |
 
 ### Scoring Thresholds
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_SELF_PLAGIARISM_THRESHOLD` | float | 0.80 | Plagiarism similarity threshold |
+| `TF_SELF_PLAGIARISM_THRESHOLD` | float | 0.72 | Hard plagiarism threshold (self) |
+| `TF_SOFT_PLAGIARISM_THRESHOLD` | float | 0.65 | Soft penalty zone start |
+| `TF_CROSS_MINER_PLAGIARISM_THRESHOLD` | float | 0.70 | Hard plagiarism threshold (cross-miner) |
 | `TF_SILENCE_THRESHOLD` | float | 0.01 | RMS silence threshold |
 | `TF_DURATION_TOLERANCE` | float | 0.20 | Duration deviation with no penalty |
 | `TF_DURATION_TOLERANCE_MAX` | float | 0.50 | Duration deviation for score 0 |
-| `TF_WEIGHT_PERTURBATION` | float | 0.20 | Per-round weight perturbation range |
+| `TF_WEIGHT_PERTURBATION` | float | 0.30 | Per-round weight perturbation range |
+| `TF_SCORER_DROPOUT_RATE` | float | 0.10 | Per-scorer dropout probability |
+| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto | Private nonce for perturbation seed |
 
 ### EMA / Leaderboard
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_EMA_ALPHA` | float | 0.2 | EMA smoothing factor |
-| `TF_STEEPEN_BASELINE` | float | 0.50 | Min EMA for nonzero weight |
+| `TF_EMA_NEW_MINER_SEED` | float | 0.25 | Initial EMA for new miners |
+| `TF_STEEPEN_BASELINE` | float | 0.45 | Min EMA for nonzero weight |
 | `TF_STEEPEN_POWER` | float | 2.0 | Steepening exponent |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | 115 | Blocks between weight sets |
 
-### Speed Scoring
+### FAD (Frechet Audio Distance)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_SPEED_BEST_SECONDS` | float | 5.0 | Fastest tier (score 1.0) |
-| `TF_SPEED_MID_SECONDS` | float | 30.0 | Mid-tier latency |
-| `TF_SPEED_MID_SCORE` | float | 0.3 | Score at mid-tier |
-| `TF_SPEED_MAX_SECONDS` | float | 60.0 | Slowest tier (score 0.0) |
+| `TF_FAD_REFERENCE_STATS_PATH` | str | ./reference_fad_stats.npz | Reference statistics file |
+| `TF_FAD_WINDOW_SIZE` | int | 50 | Embeddings per miner for FAD |
+| `TF_FAD_PENALTY_MIDPOINT` | float | 15.0 | FAD value at 50% penalty |
+| `TF_FAD_PENALTY_STEEPNESS` | float | 2.0 | Sigmoid steepness |
+| `TF_FAD_PENALTY_FLOOR` | float | 0.5 | Minimum penalty multiplier |
 
-### Duration Defaults
+### Duration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_DEFAULT_DURATION` | float | 10.0 | Default challenge duration (s) |
-| `TF_MAX_DURATION` | float | 60.0 | Maximum duration (s) |
+| `TF_MAX_DURATION` | float | 180.0 | Maximum duration (s) |
 | `TF_MIN_DURATION` | float | 1.0 | Minimum duration (s) |
 
 ### CLAP Model
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_CLAP_MODEL` | str | laion/clap-htsat-unfused | CLAP model for scoring |
+| `TF_CLAP_MODEL` | str | laion/larger_clap_music | CLAP model for scoring |
 | `TF_CLAP_SAMPLE_RATE` | int | 48000 | CLAP sample rate |
 | `TF_CLAP_SIM_FLOOR` | float | 0.15 | Min cosine similarity (maps to 0) |
-| `TF_CLAP_SIM_CEILING` | float | 0.60 | Max cosine similarity (maps to 1) |
+| `TF_CLAP_SIM_CEILING` | float | 0.75 | Max cosine similarity (maps to 1) |
 
 ### MERT Model
 
@@ -361,6 +458,16 @@ All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table a
 |----------|------|---------|-------------|
 | `TF_MERT_MODEL` | str | m-a-p/MERT-v1-95M | MERT model |
 | `TF_MERT_SAMPLE_RATE` | int | 24000 | MERT sample rate |
+
+### Preference Model
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `TF_PREFERENCE_MODEL_PATH` | str | None | Trained preference model path |
+| `TF_PREFERENCE_WEIGHT_MIN` | float | 0.02 | Min auto-scaled weight |
+| `TF_PREFERENCE_WEIGHT_MAX` | float | 0.20 | Max auto-scaled weight |
+| `TF_PREFERENCE_ACCURACY_MIN` | float | 0.55 | Accuracy for min weight |
+| `TF_PREFERENCE_ACCURACY_MAX` | float | 0.80 | Accuracy for max weight |
 
 ### API / Server
 
@@ -378,12 +485,6 @@ All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table a
 | `TF_ORGANIC_API_ENABLED` | bool | true | Enable organic generation API on validator |
 | `TF_ORGANIC_API_PORT` | int | 8090 | Port for the validator's organic API |
 
-### Preference Model
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_PREFERENCE_MODEL_PATH` | str | None | Trained preference model path |
-
 ### Logging / Monitoring
 
 | Variable | Type | Default | Description |
@@ -398,91 +499,112 @@ All weights must sum to 1.0. See the [Scoring Signals](#scoring-signals) table a
 
 ```
 tuneforge/
-├── assets/brand/               -- Brand assets (banner, logomark)
+├── assets/brand/                  -- Brand assets (banner, logomark)
 ├── docs/
-│   ├── miner_setup.md          -- Complete miner guide
-│   ├── validator_setup.md      -- Complete validator guide
-│   └── setup.md                -- Architecture and setup reference
+│   ├── miner_setup.md             -- Complete miner guide
+│   ├── validator_setup.md         -- Complete validator guide
+│   └── setup.md                   -- Architecture and setup reference
 ├── neurons/
-│   ├── miner.py                -- Miner entry point
-│   └── validator.py            -- Validator entry point
+│   ├── miner.py                   -- Miner entry point
+│   └── validator.py               -- Validator entry point
 ├── scripts/
-│   ├── download_models.sh      -- Model download helper
-│   ├── run_miner.sh            -- Miner launch script
-│   ├── run_validator.sh        -- Validator launch script
-│   └── setup.sh                -- Environment setup
-├── tests/                      -- Test suite (pytest)
+│   ├── download_models.sh         -- Model download helper
+│   ├── run_miner.sh               -- Miner launch script
+│   ├── run_validator.sh           -- Validator launch script
+│   └── setup.sh                   -- Environment setup
+├── tests/                         -- Test suite (pytest, 436 tests)
 ├── tools/
-│   ├── calibrate_mert.py       -- MERT bell-curve calibration
-│   ├── export_and_train.py     -- Annotation export + preference training
-│   └── train_preference.py     -- Preference model training
+│   ├── annotate_preferences.py    -- A/B preference annotation tool
+│   ├── build_embedding_cache.py   -- CLAP embedding cache builder
+│   ├── build_reference_stats.py   -- FAD reference statistics builder
+│   ├── calibrate_mert.py          -- MERT calibration tool
+│   ├── export_and_train.py        -- Annotation export + preference training
+│   └── train_preference.py        -- Preference model training (Bradley-Terry)
 ├── tuneforge/
-│   ├── __init__.py             -- Version, constants
-│   ├── settings.py             -- Pydantic settings (TF_ env vars)
+│   ├── __init__.py                -- Version, constants
+│   ├── settings.py                -- Pydantic settings (TF_ env vars)
+│   ├── subnet_api.py              -- Subnet API interface
 │   ├── api/
-│   │   ├── server.py           -- SaaS platform FastAPI application
-│   │   ├── validator_api.py    -- Organic generation API (runs inside validator)
-│   │   └── routes/             -- API route handlers
+│   │   ├── models.py              -- API data models
+│   │   ├── organic_router.py      -- Organic generation router
+│   │   ├── server.py              -- SaaS platform FastAPI application
+│   │   ├── validator_api.py       -- Organic API (runs inside validator)
+│   │   └── routes/                -- API route handlers (generate, health)
 │   ├── base/
-│   │   ├── neuron.py           -- Base neuron class
-│   │   ├── miner.py            -- Base miner neuron
-│   │   ├── validator.py        -- Base validator neuron
-│   │   ├── protocol.py         -- Synapse definitions
-│   │   └── dendrite.py         -- Dendrite response tracking
+│   │   ├── neuron.py              -- Base neuron class
+│   │   ├── miner.py               -- Base miner neuron
+│   │   ├── validator.py           -- Base validator neuron
+│   │   ├── protocol.py            -- Synapse definitions
+│   │   └── dendrite.py            -- Dendrite response tracking
 │   ├── config/
-│   │   └── scoring_config.py   -- All scoring weights and thresholds
+│   │   └── scoring_config.py      -- All scoring weights and thresholds
 │   ├── core/
-│   │   ├── miner.py            -- TuneForgeMiner implementation
-│   │   └── validator.py        -- TuneForgeValidator implementation
+│   │   ├── miner.py               -- TuneForgeMiner implementation
+│   │   └── validator.py           -- TuneForgeValidator implementation
 │   ├── generation/
-│   │   ├── model_manager.py    -- Backend manager (lazy loading, GPU monitoring)
-│   │   ├── musicgen_backend.py -- MusicGen generation backend
+│   │   ├── model_manager.py       -- Backend manager (lazy loading, GPU monitoring)
+│   │   ├── musicgen_backend.py    -- MusicGen generation backend
 │   │   ├── stable_audio_backend.py -- Stable Audio backend
-│   │   ├── audio_utils.py      -- Audio normalization, encoding, fades
-│   │   └── prompt_parser.py    -- Natural language prompt builder
+│   │   ├── audio_utils.py         -- Audio normalization, encoding, fades
+│   │   └── prompt_parser.py       -- Natural language prompt builder
 │   ├── rewards/
-│   │   ├── reward.py           -- ProductionRewardModel (composite scoring)
-│   │   ├── leaderboard.py      -- EMA leaderboard with steepening
-│   │   ├── weight_setter.py    -- On-chain weight submission
-│   │   └── scoring.py          -- Task-level scorer
+│   │   ├── reward.py              -- ProductionRewardModel (composite scoring)
+│   │   ├── leaderboard.py         -- EMA leaderboard with steepening
+│   │   ├── weight_setter.py       -- On-chain weight submission
+│   │   └── scoring.py             -- Task-level scorer
 │   ├── scoring/
-│   │   ├── clap_scorer.py      -- CLAP text-audio similarity (30%)
-│   │   ├── musicality.py       -- Pitch, harmony, rhythm (10%)
-│   │   ├── neural_quality.py   -- MERT learned representations (10%)
-│   │   ├── production_quality.py -- Spectral balance, LUFS, dynamics (8%)
-│   │   ├── melody_coherence.py -- Melodic intervals, contour (7%)
-│   │   ├── structural_completeness.py -- Section detection, form (7%)
-│   │   ├── audio_quality.py    -- Signal-level analysis (6%)
-│   │   ├── preference_model.py -- Perceptual quality (6%)
-│   │   ├── vocal_quality.py    -- Vocal clarity, pitch (6%)
-│   │   ├── diversity.py        -- CLAP embedding diversity (5%)
-│   │   ├── attribute_verifier.py -- Attribute verification (0%, opt-in)
-│   │   ├── artifact_detector.py -- Clipping, loops, discontinuity
-│   │   ├── plagiarism.py       -- Fingerprint-based plagiarism
-│   │   └── genre_profiles.py   -- Genre-aware quality targets
+│   │   ├── clap_scorer.py         -- CLAP text-audio similarity
+│   │   ├── musicality.py          -- Pitch, harmony, rhythm, arrangement
+│   │   ├── neural_quality.py      -- MERT learned representations
+│   │   ├── production_quality.py  -- Spectral balance, LUFS, dynamics
+│   │   ├── melody_coherence.py    -- Melodic intervals, contour, memorability
+│   │   ├── structural_completeness.py -- Section detection, form, transitions
+│   │   ├── audio_quality.py       -- Signal-level analysis
+│   │   ├── preference_model.py    -- Preference MLP (single/dual) + auto-scaler
+│   │   ├── vocal_quality.py       -- Vocal clarity, pitch
+│   │   ├── vocal_lyrics.py        -- Whisper-based lyrics intelligibility
+│   │   ├── timbral_naturalness.py -- Spectral envelope, harmonic decay, transients
+│   │   ├── mix_separation.py      -- Spectral clarity, frequency masking, spatial depth
+│   │   ├── learned_mos.py         -- Multi-resolution perceptual quality
+│   │   ├── perceptual_quality.py  -- Spectral MOS estimation
+│   │   ├── neural_codec_quality.py -- EnCodec reconstruction quality
+│   │   ├── diversity.py           -- CLAP embedding diversity (shared CLAP)
+│   │   ├── attribute_verifier.py  -- Prompt compliance (tempo, key, instruments)
+│   │   ├── fad_scorer.py          -- Frechet Audio Distance (per-miner)
+│   │   ├── artifact_detector.py   -- Clipping, loops, discontinuity
+│   │   ├── plagiarism.py          -- Self/cross-miner/reference + canonical-form
+│   │   ├── stereo_quality.py      -- Stereo imaging metrics
+│   │   ├── chord_coherence.py     -- Harmonic structure analysis
+│   │   ├── harmonic_quality.py    -- Vocal/formant characteristics
+│   │   ├── genre_profiles.py      -- Genre-aware quality targets (9 families)
+│   │   ├── multi_scale.py         -- Duration-based weight adjustment + bonuses
+│   │   ├── conditional_targets.py -- Prompt-derived quality targets
+│   │   ├── progressive_difficulty.py -- Network quality EMA -> difficulty
+│   │   ├── active_learner.py      -- Active learning for annotation pairs
+│   │   └── annotator_reliability.py -- Annotator quality tracking
 │   ├── utils/
-│   │   ├── logging.py          -- Loguru setup
-│   │   ├── config.py           -- Env file loading
-│   │   └── weight_utils.py     -- Weight processing helpers
+│   │   ├── logging.py             -- Loguru setup
+│   │   ├── config.py              -- Env file loading
+│   │   └── weight_utils.py        -- Weight processing helpers
 │   └── validation/
-│       ├── prompt_generator.py -- Challenge prompt generation (100k+ combos)
-│       └── challenge_manager.py -- Challenge tracking
-├── docker-compose.yml          -- Docker services
-├── Dockerfile.miner            -- Miner container (NVIDIA CUDA)
-├── Dockerfile.validator        -- Validator container (CPU-only)
-├── ecosystem.config.js         -- PM2 process manager config
-├── pyproject.toml              -- Project metadata and dependencies
-├── .env.miner.example          -- Miner config template
-└── .env.validator.example      -- Validator config template
+│       ├── prompt_generator.py    -- Challenge prompt generation (100k+ combos)
+│       └── challenge_manager.py   -- Challenge tracking
+├── docker-compose.yml             -- Docker services
+├── Dockerfile.miner               -- Miner container (NVIDIA CUDA)
+├── Dockerfile.validator           -- Validator container (CPU-only)
+├── ecosystem.config.js            -- PM2 process manager config
+├── pyproject.toml                 -- Project metadata and dependencies
+├── .env.miner.example             -- Miner config template
+└── .env.validator.example         -- Validator config template
 ```
 
 ## Roadmap
 
 - **Mainnet deployment** -- currently running on testnet (netuid 234); mainnet launch pending stability milestones
-- **Preference model improvement** -- the scoring pipeline includes a preference model signal (6% weight) that starts with a bootstrap heuristic; crowd annotations and trained models progressively improve it
+- **Preference model maturation** -- the crowd annotation pipeline is live; as more annotations accumulate, the preference model weight auto-scales from 2% toward 20%, progressively shifting scoring toward human-validated quality
 - **Additional generation backends** -- expanding beyond MusicGen and Stable Audio to support new open-source music generation models as they emerge
-- **Vocal generation support** -- the scoring pipeline already includes vocal quality scoring (6% weight); dedicated vocal generation backends are planned
-- **Advanced annotation UI** -- improved crowd annotation tooling with inter-annotator agreement metrics and quality controls
+- **Vocal generation support** -- the scoring pipeline includes vocal quality (4%) and vocal/lyrics (8%) scorers; dedicated vocal generation backends are planned
+- **Progressive difficulty** -- the progressive difficulty system scales challenge complexity as network quality improves, pushing miners toward longer and higher-quality generations over time
 
 ## License
 

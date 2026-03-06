@@ -229,10 +229,9 @@ class MusicalityScorer:
             # At least 3 distinct chromas per 10s, capped at 12
             min_expected = max(3.0 * (duration / 10.0), 2.0)
             min_expected = min(min_expected, 12.0)
-            if n_distinct >= min_expected:
-                variety_score = min(1.0, n_distinct / (min_expected * 1.5))
-            else:
-                variety_score = max(0.0, n_distinct / min_expected)
+            # Continuous: ramp from 0 to 0.67 at threshold, then 0.67 to 1.0 above
+            ratio = n_distinct / max(min_expected, 1.0)
+            variety_score = float(np.clip(ratio / 1.5, 0.0, 1.0))
 
             # Smoothness: mean cosine similarity between consecutive segments
             similarities = []
@@ -251,12 +250,8 @@ class MusicalityScorer:
                 return 0.0
 
             mean_sim = float(np.mean(similarities))
-            # One-sided: penalize only random jumps (mean_sim < 0.3)
-            # Above 0.3 is acceptable; perfect smoothness (1.0) is also fine
-            if mean_sim >= 0.3:
-                smoothness_score = min(1.0, 0.6 + 0.4 * mean_sim)
-            else:
-                smoothness_score = max(0.0, mean_sim / 0.3)
+            # Continuous ramp: 0 at sim=0, 1.0 at sim=0.3, stays high above
+            smoothness_score = float(np.clip(mean_sim / 0.3, 0.0, 1.0))
 
             score = 0.5 * variety_score + 0.5 * smoothness_score
             return float(np.clip(score, 0.0, 1.0))
@@ -397,10 +392,12 @@ class MusicalityScorer:
             # One-sided minimum floor: penalize only lack of variation
             # Minimum acceptable contrast varies by genre
             contrast_floor = profile.arrangement_contrast_target * 0.3
-            if relative_std >= contrast_floor:
-                contrast_score = min(1.0, 0.5 + relative_std * 2.0)
-            else:
-                contrast_score = max(0.0, relative_std / (contrast_floor + 1e-8))
+            # Continuous: ramp up through floor, continue rising above
+            contrast_score = float(np.clip(
+                0.5 + relative_std * 2.0 if relative_std >= contrast_floor
+                else relative_std / (contrast_floor + 1e-8) * (0.5 + contrast_floor * 2.0),
+                0.0, 1.0,
+            ))
 
             # Coherence: mean pairwise cosine similarity of MFCC vectors
             similarities = []
@@ -420,12 +417,12 @@ class MusicalityScorer:
                 return 0.0
 
             mean_coherence = float(np.mean(similarities))
-            # One-sided: penalize only total incoherence (< 0.2)
-            # Higher coherence is fine (related sections evolving together)
+            # Continuous: ramp from 0 at coherence=0 to 0.6 at 0.2, then up to 1.0
+            # At threshold=0.2: 0.4+0.2=0.6, and ramp gives 0.2/0.2*0.6=0.6 → continuous
             if mean_coherence >= 0.2:
                 coherence_score = min(1.0, 0.4 + mean_coherence)
             else:
-                coherence_score = max(0.0, mean_coherence / 0.2)
+                coherence_score = max(0.0, mean_coherence / 0.2 * 0.6)
 
             score = 0.5 * contrast_score + 0.5 * coherence_score
             return float(np.clip(score, 0.0, 1.0))

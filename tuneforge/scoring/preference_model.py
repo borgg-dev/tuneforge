@@ -2,8 +2,8 @@
 Preference model for TuneForge.
 
 A lightweight MLP on top of CLAP audio embeddings that predicts
-human preference.  Returns a neutral 0.5 when no trained checkpoint
-is available (bootstrap mode).
+human preference.  In bootstrap mode (no trained checkpoint), returns
+0.5 and the reward model zeroes its weight so it has no influence.
 
 Supports two architectures:
 - Single-embedding (512-dim CLAP only) via ``PreferenceHead``
@@ -28,7 +28,12 @@ from tuneforge.scoring.clap_scorer import CLAPScorer
 
 
 class PreferenceHead(nn.Module):
-    """MLP: 512-dim CLAP embedding → scalar preference score."""
+    """MLP: 512-dim CLAP embedding → scalar preference score.
+
+    Note: No final Sigmoid — the raw logit is used for Bradley-Terry
+    training (logsigmoid on the difference).  Sigmoid is applied at
+    inference time in PreferenceModel.score().
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -40,7 +45,6 @@ class PreferenceHead(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -48,7 +52,11 @@ class PreferenceHead(nn.Module):
 
 
 class DualPreferenceHead(nn.Module):
-    """MLP for dual-embedding preference: CLAP (512) + MERT (768) = 1280-dim input."""
+    """MLP for dual-embedding preference: CLAP (512) + MERT (768) = 1280-dim input.
+
+    Note: No final Sigmoid — raw logit for Bradley-Terry training.
+    Sigmoid applied at inference in PreferenceModel.score().
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -63,7 +71,6 @@ class DualPreferenceHead(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -183,6 +190,11 @@ class PreferenceModel:
         else:
             logger.info("No preference model checkpoint — running in bootstrap mode")
 
+    @property
+    def is_bootstrap(self) -> bool:
+        """True when no trained checkpoint is loaded (returns constant 0.5)."""
+        return self._bootstrap
+
     def score(self, audio: np.ndarray, sr: int) -> float:
         """
         Score audio for predicted human preference.
@@ -217,7 +229,7 @@ class PreferenceModel:
             tensor = tensor.cuda()
 
         with torch.no_grad():
-            pred = self._head(tensor).item()
+            pred = torch.sigmoid(self._head(tensor)).item()
 
         return float(np.clip(pred, 0.0, 1.0))
 
@@ -240,7 +252,7 @@ class PreferenceModel:
             tensor = tensor.cuda()
 
         with torch.no_grad():
-            pred = self._head(tensor).item()
+            pred = torch.sigmoid(self._head(tensor)).item()
 
         return float(np.clip(pred, 0.0, 1.0))
 

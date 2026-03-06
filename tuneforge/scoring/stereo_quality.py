@@ -3,10 +3,30 @@ Stereo quality scorer for TuneForge.
 
 Assesses stereo field quality: width, phase coherence, mid/side balance.
 Penalizes mono-disguised-as-stereo and anti-phase content.
+
+Genre-aware: adjusts mid/side balance target based on genre — electronic
+and ambient music use wider stereo fields than pop/rock.
 """
 
 import numpy as np
 from loguru import logger
+
+from tuneforge.scoring.genre_profiles import GenreProfile, get_genre_profile
+
+
+# Mid/side ratio targets by genre family
+_MS_RATIO_TARGETS: dict[str, float] = {
+    "default": 4.0,
+    "pop": 4.0,
+    "rock": 3.5,
+    "electronic": 2.5,  # wider stereo fields are standard
+    "hip-hop": 3.5,
+    "jazz-blues": 3.0,
+    "classical-cinematic": 2.8,
+    "ambient": 2.0,  # very wide stereo is common
+    "folk-acoustic": 4.0,
+    "groove-soul": 3.5,
+}
 
 
 class StereoQualityScorer:
@@ -18,10 +38,13 @@ class StereoQualityScorer:
         "mid_side_balance": 0.35,
     }
 
-    def score(self, audio: np.ndarray, sr: int) -> dict[str, float]:
+    def score(self, audio: np.ndarray, sr: int, genre: str = "") -> dict[str, float]:
         """Score stereo quality. Expects 2-channel audio (shape: [samples, 2]).
-        If mono (1-D or single channel), returns penalty scores."""
+        If mono (1-D or single channel), returns penalty scores.
+        Genre-aware mid/side balance targeting."""
         try:
+            profile = get_genre_profile(genre) if genre else GenreProfile(family="default")
+
             if audio.ndim == 1 or (audio.ndim == 2 and audio.shape[1] == 1):
                 # Mono audio — mild penalty (many AI models are mono)
                 return {
@@ -31,20 +54,30 @@ class StereoQualityScorer:
                 }
 
             if audio.ndim == 2 and audio.shape[0] == 2:
-                # Channels-first format
+                # Channels-first format (2, N)
                 left = audio[0].astype(np.float32)
                 right = audio[1].astype(np.float32)
             elif audio.ndim == 2 and audio.shape[1] == 2:
-                # Channels-last format
+                # Channels-last format (N, 2)
                 left = audio[:, 0].astype(np.float32)
                 right = audio[:, 1].astype(np.float32)
+            elif audio.ndim == 2 and audio.shape[1] > 2:
+                # Multi-channel (>2): use first two channels
+                left = audio[:, 0].astype(np.float32)
+                right = audio[:, 1].astype(np.float32)
+            elif audio.ndim == 2 and audio.shape[0] > 2:
+                # Multi-channel channels-first (>2, N): use first two
+                left = audio[0].astype(np.float32)
+                right = audio[1].astype(np.float32)
             else:
                 return {k: 0.5 for k in self.WEIGHTS}
+
+            ms_target = _MS_RATIO_TARGETS.get(profile.family, 4.0)
 
             return {
                 "stereo_width": self._score_stereo_width(left, right),
                 "phase_coherence": self._score_phase_coherence(left, right),
-                "mid_side_balance": self._score_mid_side_balance(left, right),
+                "mid_side_balance": self._score_mid_side_balance(left, right, ms_target),
             }
 
         except Exception as exc:
@@ -111,8 +144,14 @@ class StereoQualityScorer:
             return float(np.clip(ratio * 0.5, 0.0, 0.5))
 
     @staticmethod
-    def _score_mid_side_balance(left: np.ndarray, right: np.ndarray) -> float:
-        """Score the mid/side energy ratio for good stereo balance."""
+    def _score_mid_side_balance(
+        left: np.ndarray, right: np.ndarray, target_ratio: float = 4.0,
+    ) -> float:
+        """Score the mid/side energy ratio for good stereo balance.
+
+        Target ratio is genre-aware: electronic/ambient use wider stereo
+        (lower target ratio) than pop/rock.
+        """
         mid = (left + right) / 2.0
         side = (left - right) / 2.0
 
@@ -121,5 +160,5 @@ class StereoQualityScorer:
 
         ratio = mid_energy / side_energy
 
-        # Bell curve centered at 4.0 (mid ~4x side = typical good stereo)
-        return float(np.clip(np.exp(-0.3 * (ratio - 4.0) ** 2), 0.0, 1.0))
+        # Bell curve centered at genre-appropriate target
+        return float(np.clip(np.exp(-0.3 * (ratio - target_ratio) ** 2), 0.0, 1.0))

@@ -88,9 +88,8 @@ class TestDualPreferenceHead:
         x = torch.randn(4, 1280)  # batch of 4, 1280-dim input
         out = head(x)
         assert out.shape == (4, 1)
-        # Output should be in [0, 1] due to Sigmoid
-        assert (out >= 0).all()
-        assert (out <= 1).all()
+        # Output is raw logit (no Sigmoid — applied at inference in PreferenceModel)
+        assert out.requires_grad
 
     def test_single_sample(self):
         import torch

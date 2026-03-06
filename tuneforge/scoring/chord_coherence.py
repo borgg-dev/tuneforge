@@ -159,7 +159,7 @@ class ChordCoherenceScorer:
         mode_a = chord_a.split("_")[1] if "_" in chord_a else "major"
         mode_b = chord_b.split("_")[1] if "_" in chord_b else "major"
 
-        # Relative major/minor
+        # Parallel major/minor (same root, different mode — e.g. C major → C minor)
         if root_a == root_b and mode_a != mode_b:
             return 1.0
 

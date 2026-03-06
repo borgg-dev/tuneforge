@@ -91,7 +91,7 @@ class OrganicQueryRouter:
 
     # Minimum EMA score to be eligible for organic traffic.
     # Miners below this threshold haven't proven quality through challenges.
-    MIN_EMA_THRESHOLD: float = 0.0  # TODO: set to 0.5 for mainnet
+    MIN_EMA_THRESHOLD: float = 0.45
 
     # Maximum concurrent organic requests per miner.
     MAX_ACTIVE_PER_MINER: int = 3

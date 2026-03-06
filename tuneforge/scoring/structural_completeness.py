@@ -128,12 +128,15 @@ class StructuralCompletenessScorer:
             expected = profile.structural_section_target * duration / 30.0
             expected = max(expected, 1.0)
 
-            # One-sided minimum: at least 1 section per 10s, no upper penalty
+            # Continuous scoring: ramp up smoothly
             min_sections = max(1, int(expected * 0.5))
+            # At min_sections: continuous value = 0.5 + 0.5 * min(min_sections/expected, 1.5)
+            threshold_score = min(1.0, 0.5 + 0.5 * min(min_sections / max(expected, 1), 1.5))
             if n_sections >= min_sections:
                 score = min(1.0, 0.5 + 0.5 * min(n_sections / max(expected, 1), 1.5))
             else:
-                score = max(0.0, n_sections / max(min_sections, 1))
+                # Ramp from 0 to threshold_score at min_sections
+                score = max(0.0, n_sections / max(min_sections, 1) * threshold_score)
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -189,12 +192,14 @@ class StructuralCompletenessScorer:
 
             mean_distance = float(np.mean(distances))
 
-            # One-sided minimum: sections should have at least some distinctness
+            # Continuous scoring for section variety
             min_distance = profile.structural_variety_target * 0.3
+            # At threshold: 0.5 + min_distance * 2.0
+            threshold_score = min(1.0, 0.5 + min_distance * 2.0)
             if mean_distance >= min_distance:
                 score = min(1.0, 0.5 + mean_distance * 2.0)
             else:
-                score = max(0.0, mean_distance / (min_distance + 1e-8))
+                score = max(0.0, mean_distance / (min_distance + 1e-8) * threshold_score)
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0

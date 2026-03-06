@@ -82,15 +82,17 @@ class AudioQualityScorer:
         The ideal range (~0.3-0.7 harmonic ratio) is scored highest.
         """
         try:
+            if float(np.max(np.abs(audio))) < 1e-6:
+                return 0.0
             harmonic, percussive = librosa.effects.hpss(audio)
             harmonic_energy = float(np.sum(harmonic ** 2))
             percussive_energy = float(np.sum(percussive ** 2))
-            total_energy = harmonic_energy + percussive_energy + 1e-8
+            total_energy = harmonic_energy + percussive_energy
 
             if total_energy < 1e-8:
                 return 0.0
 
-            ratio = harmonic_energy / total_energy
+            ratio = harmonic_energy / (total_energy + 1e-10)
             # Score peaks at 0.5, falls off toward 0.0 and 1.0
             # Using a bell-shaped curve centred at 0.5
             score = 1.0 - abs(ratio - 0.5) / 0.5
@@ -135,6 +137,8 @@ class AudioQualityScorer:
         troughs.  Engineered or spectrally flat signals score lower.
         """
         try:
+            if float(np.max(np.abs(audio))) < 1e-6 or len(audio) / sr < 0.1:
+                return 0.0
             contrast = librosa.feature.spectral_contrast(y=audio, sr=sr)
             # contrast shape: (n_bands+1, n_frames)
             mean_contrast = float(np.mean(contrast))
@@ -188,6 +192,8 @@ class AudioQualityScorer:
         randomness (0.0) both score lower.
         """
         try:
+            if float(np.max(np.abs(audio))) < 1e-6:
+                return 0.0
             hop_length = 512
             chroma = librosa.feature.chroma_stft(y=audio, sr=sr, hop_length=hop_length)
             if chroma.shape[1] < 4:

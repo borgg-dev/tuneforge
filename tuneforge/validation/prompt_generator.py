@@ -4,9 +4,9 @@ Prompt generator for TuneForge validation challenges.
 Produces randomised music generation challenges with coherent
 genre/mood/tempo/instrument combinations for miner evaluation.
 
-CRITICAL-03 fix: Expanded genre/mood/duration/template vocabulary and added
-per-challenge creative constraints, growing the effective challenge space to
-100,000+ unique combinations and making pre-caching impractical.
+Uses expanded genre/mood/duration/template vocabulary with per-challenge
+creative constraints, producing 100,000+ unique combinations to make
+pre-caching impractical.
 """
 
 import random

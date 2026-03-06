@@ -5,13 +5,12 @@ Measures both intra-miner diversity (varied outputs across rounds) and
 population-level diversity (preventing collective convergence where all
 miners produce similar-sounding music).
 
-MEDIUM-01 fix: replaced inter-miner cosine distance (which rewarded
-off-topic audio and penalised correct consensus) with intra-miner cosine
-distance against each miner's own submission history.
+Uses intra-miner cosine distance against each miner's own submission
+history (not inter-miner, which would reward off-topic audio).
 
-Audit improvements:
-- History increased from 10 to 50 entries
-- Added population-level diversity bonus
+Features:
+- 50-entry per-miner history
+- Population-level diversity bonus (30% weight)
 """
 
 from collections import defaultdict, deque
@@ -23,7 +22,7 @@ from tuneforge.config.scoring_config import CLAP_MODEL
 from tuneforge.scoring.clap_scorer import CLAPScorer
 from tuneforge.base.protocol import MusicGenerationSynapse
 
-# Number of past embeddings to retain per miner (increased from 10)
+# Number of past embeddings to retain per miner
 _HISTORY_MAXLEN: int = 50
 
 # Default score for miners with no submission history yet
@@ -36,12 +35,14 @@ _POPULATION_DIVERSITY_WEIGHT: float = 0.3
 class DiversityScorer:
     """Score intra-miner and population-level output diversity via CLAP embeddings."""
 
-    def __init__(self) -> None:
-        self._clap = CLAPScorer(model_name=CLAP_MODEL)
+    def __init__(self, clap_scorer: CLAPScorer | None = None) -> None:
+        self._clap = clap_scorer or CLAPScorer(model_name=CLAP_MODEL)
         # Maps hotkey -> deque of past CLAP embeddings (up to _HISTORY_MAXLEN)
         self._miner_history: dict[str, deque[np.ndarray]] = defaultdict(
             lambda: deque(maxlen=_HISTORY_MAXLEN)
         )
+        # Cache embeddings from score_batch for reuse in update_history
+        self._batch_embeddings: list[np.ndarray | None] = []
 
     def score_batch(
         self,
@@ -72,6 +73,9 @@ class DiversityScorer:
         embeddings: list[np.ndarray | None] = []
         for resp in responses:
             embeddings.append(self._extract_embedding(resp))
+
+        # Cache for reuse in update_history (avoids re-extraction)
+        self._batch_embeddings = list(embeddings)
 
         scores: list[float] = []
 
@@ -119,6 +123,9 @@ class DiversityScorer:
 
         Call this *after* ``score_batch`` so that history is not updated
         before scoring (which would inflate self-similarity scores).
+
+        Reuses cached embeddings from score_batch when available to avoid
+        redundant CLAP inference.
         """
         if len(responses) != len(hotkeys):
             raise ValueError(
@@ -126,14 +133,19 @@ class DiversityScorer:
                 f"hotkeys length ({len(hotkeys)})"
             )
 
-        for resp, hotkey in zip(responses, hotkeys):
-            emb = self._extract_embedding(resp)
+        use_cache = len(self._batch_embeddings) == len(responses)
+
+        for i, (resp, hotkey) in enumerate(zip(responses, hotkeys)):
+            emb = self._batch_embeddings[i] if use_cache else self._extract_embedding(resp)
             if emb is not None:
                 self._miner_history[hotkey].append(emb)
                 logger.debug(
                     f"Updated history for {hotkey}: "
                     f"{len(self._miner_history[hotkey])} embedding(s) stored"
                 )
+
+        # Clear cache after use
+        self._batch_embeddings = []
 
     # ------------------------------------------------------------------
     # Internal helpers

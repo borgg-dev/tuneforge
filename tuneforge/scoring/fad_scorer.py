@@ -142,10 +142,20 @@ class FADScorer:
 
         # sqrtm can return complex values due to numerical issues
         if np.iscomplexobj(sqrt_product):
+            # Take real part; warn if imaginary component is significant
+            max_imag = float(np.max(np.abs(sqrt_product.imag)))
+            if max_imag > 1e-3:
+                logger.debug(
+                    "sqrtm produced significant imaginary component: {:.4f}",
+                    max_imag,
+                )
             sqrt_product = sqrt_product.real
 
         trace_term = float(
             np.trace(cov1) + np.trace(cov2) - 2.0 * np.trace(sqrt_product)
         )
 
-        return max(0.0, mean_term + trace_term)
+        result = mean_term + trace_term
+        if result < -1e-3:
+            logger.debug("Negative Frechet distance ({:.4f}) — clamping to 0", result)
+        return max(0.0, result)
