@@ -61,45 +61,164 @@ class TestHeuristicScoreRange:
         assert 0.0 <= score <= 1.0
 
 
-class TestHeuristicSilence:
-    """Silence returns 0.0."""
+class TestBootstrapReturnsNeutral:
+    """Bootstrap mode returns 0.5 for all inputs (no double-counting with other scorers)."""
 
-    def test_silence_returns_zero(self, model, sample_audio_silence, sample_rate):
+    def test_silence_returns_neutral(self, model, sample_audio_silence, sample_rate):
         score = model.score(sample_audio_silence, sample_rate)
-        assert score == 0.0
+        assert score == 0.5
 
-
-@_skip_librosa
-class TestHeuristicQualityOrdering:
-    """Complex audio scores higher than noise; noise scores higher than silence."""
-
-    def test_complex_beats_noise(
-        self, model, sample_audio_complex, sample_audio_noise, sample_rate
-    ):
-        complex_score = model.score(sample_audio_complex, sample_rate)
-        noise_score = model.score(sample_audio_noise, sample_rate)
-        assert complex_score > noise_score, (
-            f"Complex ({complex_score:.4f}) should score higher than noise ({noise_score:.4f})"
-        )
-
-    def test_noise_beats_silence(
-        self, model, sample_audio_noise, sample_audio_silence, sample_rate
-    ):
-        noise_score = model.score(sample_audio_noise, sample_rate)
-        silence_score = model.score(sample_audio_silence, sample_rate)
-        assert noise_score > silence_score, (
-            f"Noise ({noise_score:.4f}) should score higher than silence ({silence_score:.4f})"
-        )
-
-
-@_skip_librosa
-class TestHeuristicNotTrivial:
-    """Complex audio scores > 0.2 (the heuristic produces meaningful scores)."""
-
-    def test_complex_above_threshold(
-        self, model, sample_audio_complex, sample_rate
-    ):
+    def test_complex_returns_neutral(self, model, sample_audio_complex, sample_rate):
         score = model.score(sample_audio_complex, sample_rate)
-        assert score > 0.2, (
-            f"Complex audio score ({score:.4f}) should be > 0.2"
+        assert score == 0.5
+
+    def test_noise_returns_neutral(self, model, sample_audio_noise, sample_rate):
+        score = model.score(sample_audio_noise, sample_rate)
+        assert score == 0.5
+
+
+class TestDualPreferenceHead:
+    """Tests for the DualPreferenceHead architecture."""
+
+    def test_input_output_shapes(self):
+        import torch
+        from tuneforge.scoring.preference_model import DualPreferenceHead
+
+        head = DualPreferenceHead()
+        x = torch.randn(4, 1280)  # batch of 4, 1280-dim input
+        out = head(x)
+        assert out.shape == (4, 1)
+        # Output should be in [0, 1] due to Sigmoid
+        assert (out >= 0).all()
+        assert (out <= 1).all()
+
+    def test_single_sample(self):
+        import torch
+        from tuneforge.scoring.preference_model import DualPreferenceHead
+
+        head = DualPreferenceHead()
+        x = torch.randn(1, 1280)
+        out = head(x)
+        assert out.shape == (1, 1)
+
+    def test_wrong_input_dim_raises(self):
+        import torch
+        from tuneforge.scoring.preference_model import DualPreferenceHead
+
+        head = DualPreferenceHead()
+        with pytest.raises(RuntimeError):
+            head(torch.randn(1, 512))  # Wrong input size
+
+
+class TestPreferenceWeightScaler:
+    """Tests for PreferenceWeightScaler."""
+
+    def test_none_accuracy_returns_min_weight(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(min_weight=0.02, max_weight=0.10)
+        assert scaler.get_scaled_weight() == pytest.approx(0.02)
+
+    def test_min_accuracy_returns_min_weight(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(min_weight=0.02, max_weight=0.10, min_accuracy=0.55)
+        scaler.update_accuracy(0.55)
+        assert scaler.get_scaled_weight() == pytest.approx(0.02)
+
+    def test_max_accuracy_returns_max_weight(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(min_weight=0.02, max_weight=0.10, max_accuracy=0.80)
+        scaler.update_accuracy(0.80)
+        assert scaler.get_scaled_weight() == pytest.approx(0.10)
+
+    def test_mid_accuracy_interpolates(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(
+            min_weight=0.0, max_weight=1.0, min_accuracy=0.0, max_accuracy=1.0
         )
+        scaler.update_accuracy(0.5)
+        assert scaler.get_scaled_weight() == pytest.approx(0.5, abs=0.01)
+
+    def test_below_min_accuracy_clamps(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(min_weight=0.02, max_weight=0.10, min_accuracy=0.55)
+        scaler.update_accuracy(0.40)
+        assert scaler.get_scaled_weight() == pytest.approx(0.02)
+
+    def test_above_max_accuracy_clamps(self):
+        from tuneforge.scoring.preference_model import PreferenceWeightScaler
+
+        scaler = PreferenceWeightScaler(min_weight=0.02, max_weight=0.10, max_accuracy=0.80)
+        scaler.update_accuracy(0.99)
+        assert scaler.get_scaled_weight() == pytest.approx(0.10)
+
+
+class TestCheckpointFormatDetection:
+    """Tests for auto-detecting checkpoint format (dual vs single)."""
+
+    def test_legacy_single_checkpoint(self, tmp_path, monkeypatch):
+        """Legacy raw state_dict with 512-dim input loads as single mode."""
+        import torch
+        from tuneforge.scoring.preference_model import PreferenceHead, PreferenceModel
+
+        # Prevent CUDA OOM by forcing CPU
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+        head = PreferenceHead()
+        path = str(tmp_path / "legacy.pt")
+        torch.save(head.state_dict(), path)
+
+        m = PreferenceModel(model_path=path)
+        assert m._bootstrap is False
+        assert m._dual_mode is False
+        assert isinstance(m._head, PreferenceHead)
+
+    def test_new_format_single_checkpoint(self, tmp_path, monkeypatch):
+        """New checkpoint format with 512-dim loads as single mode."""
+        import torch
+        from tuneforge.scoring.preference_model import PreferenceHead, PreferenceModel
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+        head = PreferenceHead()
+        path = str(tmp_path / "new_single.pt")
+        torch.save(
+            {"state_dict": head.state_dict(), "val_accuracy": 0.72, "embedding_dim": 512},
+            path,
+        )
+
+        m = PreferenceModel(model_path=path)
+        assert m._bootstrap is False
+        assert m._dual_mode is False
+        assert m.get_scaled_weight() > 0.02  # accuracy loaded
+
+    def test_dual_checkpoint(self, tmp_path, monkeypatch):
+        """Checkpoint with 1280-dim input loads as dual mode."""
+        import torch
+        from tuneforge.scoring.preference_model import DualPreferenceHead, PreferenceModel
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+        head = DualPreferenceHead()
+        path = str(tmp_path / "dual.pt")
+        torch.save(
+            {"state_dict": head.state_dict(), "val_accuracy": 0.75, "embedding_dim": 1280},
+            path,
+        )
+
+        m = PreferenceModel(model_path=path)
+        assert m._bootstrap is False
+        assert m._dual_mode is True
+        assert isinstance(m._head, DualPreferenceHead)
+
+    def test_get_scaled_weight_bootstrap(self):
+        """Bootstrap model returns min weight."""
+        from tuneforge.scoring.preference_model import PreferenceModel
+
+        m = PreferenceModel(model_path=None)
+        # No accuracy loaded, should return min_weight (0.02)
+        assert m.get_scaled_weight() == pytest.approx(0.02)

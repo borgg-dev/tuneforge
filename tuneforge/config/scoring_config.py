@@ -31,27 +31,32 @@ BURN_WEIGHT: float = _env_float("TF_BURN_WEIGHT", 0.0)
 # Scoring composite weights  (must sum to 1.0)
 #
 # Quality is the primary driver; prompt adherence is secondary.
-# Quality is spread across eight independent scorers for gaming resistance.
-#   Prompt adherence:  clap                                                    = 30%
-#   Music quality:     quality + musicality + production + melody              = 60%
+# Quality is spread across fourteen independent scorers for gaming resistance.
+#   Prompt adherence:  clap                                                    = 20%
+#   Music quality:     quality + musicality + production + melody              = 54%
 #                      + neural_quality + preference + structural + vocal
+#                      + attribute + perceptual + neural_codec
 #   Other:             diversity + speed                                       = 10%
+#   Verification:      attribute                                               = 10%
+#   Perceptual:        perceptual + neural_codec                               =  6%
 #
 # Artifact detection is applied as a penalty multiplier (not in weights).
 # ---------------------------------------------------------------------------
 SCORING_WEIGHTS: dict[str, float] = {
-    "clap": _env_float("TF_WEIGHT_CLAP", 0.30),
-    "quality": _env_float("TF_WEIGHT_QUALITY", 0.06),
+    "clap": _env_float("TF_WEIGHT_CLAP", 0.20),
+    "quality": _env_float("TF_WEIGHT_QUALITY", 0.04),
     "musicality": _env_float("TF_WEIGHT_MUSICALITY", 0.10),
-    "production": _env_float("TF_WEIGHT_PRODUCTION", 0.08),
+    "production": _env_float("TF_WEIGHT_PRODUCTION", 0.06),
     "melody": _env_float("TF_WEIGHT_MELODY", 0.07),
-    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.10),
+    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.08),
     "preference": _env_float("TF_WEIGHT_PREFERENCE", 0.06),
     "structural": _env_float("TF_WEIGHT_STRUCTURAL", 0.07),
     "vocal": _env_float("TF_WEIGHT_VOCAL", 0.06),
     "diversity": _env_float("TF_WEIGHT_DIVERSITY", 0.05),
     "speed": _env_float("TF_WEIGHT_SPEED", 0.05),
-    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.0),
+    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.10),
+    "perceptual": _env_float("TF_WEIGHT_PERCEPTUAL", 0.04),
+    "neural_codec": _env_float("TF_WEIGHT_NEURAL_CODEC", 0.02),
 }
 
 # ---------------------------------------------------------------------------
@@ -146,7 +151,7 @@ LUFS_TOLERANCE: float = _env_float("TF_LUFS_TOLERANCE", 4.0)
 # Per-round random ±N% adjustment to composite weights, seeded by challenge_id.
 # Set to 0.0 to disable perturbation entirely.
 # ---------------------------------------------------------------------------
-WEIGHT_PERTURBATION: float = _env_float("TF_WEIGHT_PERTURBATION", 0.20)
+WEIGHT_PERTURBATION: float = _env_float("TF_WEIGHT_PERTURBATION", 0.30)
 
 # ---------------------------------------------------------------------------
 # Preference model checkpoint
@@ -154,3 +159,50 @@ WEIGHT_PERTURBATION: float = _env_float("TF_WEIGHT_PERTURBATION", 0.20)
 # preference model switches from the bootstrap heuristic to learned scoring.
 # ---------------------------------------------------------------------------
 PREFERENCE_MODEL_PATH: str | None = os.environ.get("TF_PREFERENCE_MODEL_PATH", None) or None
+
+# ---------------------------------------------------------------------------
+# Scorer dropout rate (anti-gaming)
+# ---------------------------------------------------------------------------
+SCORER_DROPOUT_RATE: float = _env_float("TF_SCORER_DROPOUT_RATE", 0.10)
+
+# ---------------------------------------------------------------------------
+# EMA persistence
+# ---------------------------------------------------------------------------
+EMA_STATE_PATH: str = _env_str("TF_EMA_STATE_PATH", "./ema_state.json")
+EMA_SAVE_INTERVAL: int = _env_int("TF_EMA_SAVE_INTERVAL", 5)
+EMA_NEW_MINER_SEED: float = _env_float("TF_EMA_NEW_MINER_SEED", 0.25)
+
+# ---------------------------------------------------------------------------
+# FAD (Frechet Audio Distance) scoring
+# ---------------------------------------------------------------------------
+FAD_WINDOW_SIZE: int = _env_int("TF_FAD_WINDOW_SIZE", 50)
+FAD_REFERENCE_STATS_PATH: str = _env_str("TF_FAD_REFERENCE_STATS_PATH", "")
+FAD_PENALTY_MIDPOINT: float = _env_float("TF_FAD_PENALTY_MIDPOINT", 15.0)
+FAD_PENALTY_STEEPNESS: float = _env_float("TF_FAD_PENALTY_STEEPNESS", 2.0)
+FAD_PENALTY_FLOOR: float = _env_float("TF_FAD_PENALTY_FLOOR", 0.5)
+
+# ---------------------------------------------------------------------------
+# EnCodec model (neural codec quality)
+# ---------------------------------------------------------------------------
+ENCODEC_MODEL: str = _env_str("TF_ENCODEC_MODEL", "facebook/encodec_24khz")
+
+# ---------------------------------------------------------------------------
+# Preference weight auto-scaling
+# ---------------------------------------------------------------------------
+PREFERENCE_WEIGHT_MIN: float = _env_float("TF_PREFERENCE_WEIGHT_MIN", 0.02)
+PREFERENCE_WEIGHT_MAX: float = _env_float("TF_PREFERENCE_WEIGHT_MAX", 0.10)
+PREFERENCE_ACCURACY_MIN: float = _env_float("TF_PREFERENCE_ACCURACY_MIN", 0.55)
+PREFERENCE_ACCURACY_MAX: float = _env_float("TF_PREFERENCE_ACCURACY_MAX", 0.80)
+
+# ---------------------------------------------------------------------------
+# Active learning for annotations
+# ---------------------------------------------------------------------------
+ACTIVE_LEARNING_ENABLED: bool = _env_str("TF_ACTIVE_LEARNING_ENABLED", "true").lower() == "true"
+ACTIVE_LEARNING_TOP_K: int = _env_int("TF_ACTIVE_LEARNING_TOP_K", 3)
+
+# ---------------------------------------------------------------------------
+# Annotator reliability
+# ---------------------------------------------------------------------------
+ANNOTATOR_RELIABILITY_EMA: float = _env_float("TF_ANNOTATOR_RELIABILITY_EMA", 0.1)
+ANNOTATOR_RELIABILITY_MIN: float = _env_float("TF_ANNOTATOR_RELIABILITY_MIN", 0.1)
+ANNOTATOR_WEIGHTED_THRESHOLD: float = _env_float("TF_ANNOTATOR_WEIGHTED_THRESHOLD", 0.6)

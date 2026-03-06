@@ -23,6 +23,7 @@ from loguru import logger
 from tuneforge.base.dendrite import DendriteResponseEvent
 from tuneforge.base.protocol import MusicGenerationSynapse
 from tuneforge.base.validator import BaseValidatorNeuron
+from tuneforge.config.scoring_config import EMA_STATE_PATH, EMA_SAVE_INTERVAL
 from tuneforge.rewards.leaderboard import MinerLeaderboard
 from tuneforge.rewards.reward import ProductionRewardModel
 from tuneforge.rewards.scoring import TaskScorer
@@ -63,6 +64,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._task_scorer = TaskScorer(self.settings)
         self._prompt_generator = PromptGenerator()
         self._leaderboard = MinerLeaderboard()
+        self._leaderboard.load_state(EMA_STATE_PATH)
         self._challenge_manager = ChallengeManager()
         self._weight_setter: WeightSetter | None = None  # init after setup
         self._last_model_check: float = 0.0
@@ -361,6 +363,13 @@ class TuneForgeValidator(BaseValidatorNeuron):
         except Exception as exc:
             logger.warning(f"Failed to save leaderboard snapshot: {exc}")
 
+        # 8b. Periodic EMA state persistence
+        if self.current_round % EMA_SAVE_INTERVAL == 0:
+            try:
+                self._leaderboard.save_state(EMA_STATE_PATH)
+            except Exception as exc:
+                logger.warning(f"Failed to save EMA state: {exc}")
+
         # 9. Set weights via weight setter
         # Run in executor — set_weights is a synchronous chain call
         # (wait_for_finalization=True) that blocks for 10-20s.
@@ -640,6 +649,15 @@ class TuneForgeValidator(BaseValidatorNeuron):
     # ------------------------------------------------------------------
     # Overrides
     # ------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Shut down the validator, saving EMA state."""
+        logger.info("TuneForgeValidator shutting down — saving EMA state...")
+        try:
+            self._leaderboard.save_state(EMA_STATE_PATH)
+        except Exception as exc:
+            logger.error(f"Failed to save EMA state on shutdown: {exc}")
+        super().shutdown()
 
     def process_round_results(self, response_event: DendriteResponseEvent) -> None:
         """Process round results — scoring is done in run_validation_round."""

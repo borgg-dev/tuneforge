@@ -1,21 +1,14 @@
 """
 Plagiarism detection for TuneForge.
 
-Uses Chromaprint audio fingerprinting (via fpcalc subprocess) to detect:
-1. Cross-miner exact replay — a miner submits audio identical to another miner's
-2. Self-plagiarism — a miner resubmits the same audio across different challenges
-
-CLAP embedding similarity is NOT used for plagiarism because miners responding
-to the same prompt will naturally produce semantically similar audio. Penalizing
-semantic similarity punishes miners for doing the right thing (matching the prompt).
-
-Fingerprints are stored in a local SQLite database so repeated
-submissions can be caught across rounds.
+Uses CLAP audio embeddings for similarity-based detection:
+- Reference DB: compare against known copyrighted material embeddings
+- Cross-miner: detect near-identical submissions within a round
+- Self-plagiarism: detect repeated submissions from the same miner
 """
 
-import sqlite3
-import subprocess
-import tempfile
+from collections import defaultdict, deque
+from pathlib import Path
 
 import numpy as np
 from loguru import logger
@@ -24,40 +17,37 @@ from tuneforge.config.scoring_config import SELF_PLAGIARISM_THRESHOLD
 
 
 class PlagiarismDetector:
-    """Detect plagiarised or duplicate audio submissions via fingerprinting."""
+    """CLAP-embedding based plagiarism and copy detection."""
 
-    def __init__(self, db_path: str = "fingerprints.db") -> None:
-        self._db_path = db_path
-        self._round_fingerprints: dict[str, str] = {}  # challenge_id:hotkey → fingerprint
-        self._store_count: int = 0
-        self._fpcalc_available: bool | None = None
-        self._init_db()
+    def __init__(
+        self,
+        clap_scorer=None,
+        reference_embeddings_path: str | None = None,
+        reference_threshold: float = 0.85,
+        self_similarity_threshold: float | None = None,
+        history_maxlen: int = 50,
+    ) -> None:
+        self._clap = clap_scorer
+        self._ref_threshold = reference_threshold
+        self._self_threshold = self_similarity_threshold or SELF_PLAGIARISM_THRESHOLD
+        self._reference_embeddings: np.ndarray | None = None
+        self._miner_history: dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=history_maxlen)
+        )
+        self._round_embeddings: dict[str, np.ndarray] = {}
 
-    def _init_db(self) -> None:
-        """Create fingerprint storage tables if they don't exist."""
-        try:
-            conn = sqlite3.connect(self._db_path)
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS fingerprints (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    miner_hotkey TEXT NOT NULL,
-                    challenge_id TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        if reference_embeddings_path and Path(reference_embeddings_path).exists():
+            try:
+                self._reference_embeddings = np.load(reference_embeddings_path)
+                if isinstance(self._reference_embeddings, np.lib.npyio.NpzFile):
+                    self._reference_embeddings = self._reference_embeddings["embeddings"]
+                logger.info(
+                    "Loaded {} reference embeddings for plagiarism detection",
+                    len(self._reference_embeddings),
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_fp_fingerprint ON fingerprints(fingerprint)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_fp_miner ON fingerprints(miner_hotkey)"
-            )
-            conn.commit()
-            conn.close()
-        except Exception as exc:
-            logger.error(f"Failed to init fingerprint DB: {exc}")
+            except Exception as exc:
+                logger.warning("Failed to load reference embeddings: {}", exc)
+                self._reference_embeddings = None
 
     def check(
         self,
@@ -66,176 +56,68 @@ class PlagiarismDetector:
         miner_hotkey: str,
         challenge_id: str,
     ) -> tuple[bool, float]:
-        """
-        Check audio for plagiarism using Chromaprint fingerprinting.
-
-        Args:
-            audio: 1-D float waveform.
-            sr: Sample rate in Hz.
-            miner_hotkey: Miner hotkey SS58 address.
-            challenge_id: Unique challenge identifier.
+        """Check audio for plagiarism.
 
         Returns:
-            (is_plagiarized, similarity) — similarity is 1.0 if plagiarized, 0.0 otherwise.
+            (is_plagiarized, max_similarity)
         """
-        fp = self._get_fingerprint(audio, sr)
-        if fp is None:
-            # fpcalc not available — cannot detect plagiarism
+        if self._clap is None:
             return False, 0.0
 
-        # --- Cross-miner exact replay check ---
-        # Check against other miners in the current round
-        for key, stored_fp in self._round_fingerprints.items():
-            stored_hotkey = key.split(":", 1)[1] if ":" in key else ""
-            if stored_hotkey == miner_hotkey:
+        embedding = self._clap.get_audio_embedding(audio, sr)
+        if embedding is None:
+            return False, 0.0
+
+        # Normalize
+        norm = np.linalg.norm(embedding)
+        if norm < 1e-8:
+            return False, 0.0
+        embedding = embedding / norm
+
+        # 1. Reference DB check
+        if self._reference_embeddings is not None and len(self._reference_embeddings) > 0:
+            sims = self._reference_embeddings @ embedding
+            max_sim = float(np.max(sims))
+            if max_sim > self._ref_threshold:
+                logger.warning(
+                    "Reference plagiarism detected for miner {}: sim={:.3f}",
+                    miner_hotkey[:8],
+                    max_sim,
+                )
+                return True, max_sim
+
+        # 2. Cross-miner check (within current round)
+        for key, other_emb in self._round_embeddings.items():
+            other_hotkey = key.split(":", 1)[1] if ":" in key else ""
+            if other_hotkey == miner_hotkey:
                 continue
-            if fp == stored_fp:
-                logger.warning(f"Exact fingerprint match (cross-miner) for {miner_hotkey[:16]}…")
-                self._store_fingerprint(fp, miner_hotkey, challenge_id)
-                return True, 1.0
+            sim = float(np.dot(embedding, other_emb))
+            if sim > self._self_threshold:
+                logger.warning(
+                    "Cross-miner copy detected: {} vs {}, sim={:.3f}",
+                    miner_hotkey[:8],
+                    other_hotkey[:8],
+                    sim,
+                )
+                return True, sim
 
-        # Check against other miners in past rounds (DB)
-        if self._fingerprint_exists(fp, miner_hotkey):
-            logger.warning(f"Exact fingerprint match (past round) for {miner_hotkey[:16]}…")
-            self._store_fingerprint(fp, miner_hotkey, challenge_id)
-            return True, 1.0
+        # 3. Self-plagiarism check (historical submissions)
+        for hist_emb in self._miner_history[miner_hotkey]:
+            sim = float(np.dot(embedding, hist_emb))
+            if sim > self._self_threshold:
+                logger.warning(
+                    "Self-plagiarism detected for miner {}: sim={:.3f}",
+                    miner_hotkey[:8],
+                    sim,
+                )
+                return True, sim
 
-        # --- Self-plagiarism check ---
-        # Check if this miner submitted this exact fingerprint before
-        self_sim = self._check_self_plagiarism(fp, miner_hotkey)
-        if self_sim >= SELF_PLAGIARISM_THRESHOLD:
-            logger.warning(
-                f"Self-plagiarism detected for {miner_hotkey[:16]}… "
-                f"(fingerprint match)"
-            )
-            self._store_fingerprint(fp, miner_hotkey, challenge_id)
-            return True, self_sim
-
-        # Store for future comparisons
-        key = f"{challenge_id}:{miner_hotkey}"
-        self._round_fingerprints[key] = fp
-        self._store_fingerprint(fp, miner_hotkey, challenge_id)
+        # Store embedding for future checks
+        self._round_embeddings[f"{challenge_id}:{miner_hotkey}"] = embedding
+        self._miner_history[miner_hotkey].append(embedding)
 
         return False, 0.0
 
     def clear_round_cache(self) -> None:
-        """Clear per-round fingerprint cache."""
-        self._round_fingerprints.clear()
-
-    # ------------------------------------------------------------------
-    # Fingerprinting via fpcalc (chromaprint)
-    # ------------------------------------------------------------------
-
-    def _get_fingerprint(self, audio: np.ndarray, sr: int) -> str | None:
-        """Generate Chromaprint fingerprint via fpcalc subprocess."""
-        # Cache fpcalc availability check
-        if self._fpcalc_available is False:
-            return None
-
-        try:
-            import soundfile as sf
-
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-                sf.write(tmp.name, audio.astype(np.float32), sr)
-                result = subprocess.run(
-                    ["fpcalc", "-raw", tmp.name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode != 0:
-                    return None
-                for line in result.stdout.strip().split("\n"):
-                    if line.startswith("FINGERPRINT="):
-                        self._fpcalc_available = True
-                        return line.split("=", 1)[1]
-            return None
-        except FileNotFoundError:
-            if self._fpcalc_available is None:
-                logger.info("fpcalc not found — fingerprint-based plagiarism detection disabled")
-            self._fpcalc_available = False
-            return None
-        except Exception as exc:
-            logger.debug(f"Fingerprinting failed: {exc}")
-            return None
-
-    def _fingerprint_exists(self, fingerprint: str, exclude_hotkey: str) -> bool:
-        """Check if fingerprint exists in DB from a different miner."""
-        if not fingerprint:
-            return False
-        try:
-            conn = sqlite3.connect(self._db_path)
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM fingerprints "
-                "WHERE fingerprint = ? AND miner_hotkey != ? AND fingerprint != ''",
-                (fingerprint, exclude_hotkey),
-            )
-            count = cursor.fetchone()[0]
-            conn.close()
-            return count > 0
-        except Exception as exc:
-            logger.error(f"Fingerprint lookup failed: {exc}")
-            return False
-
-    def _check_self_plagiarism(self, fingerprint: str, miner_hotkey: str) -> float:
-        """
-        Check if miner submitted this exact fingerprint before.
-
-        Returns 1.0 if exact match found, 0.0 otherwise.
-        """
-        if not fingerprint:
-            return 0.0
-        try:
-            conn = sqlite3.connect(self._db_path)
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM fingerprints "
-                "WHERE fingerprint = ? AND miner_hotkey = ? AND fingerprint != ''",
-                (fingerprint, miner_hotkey),
-            )
-            count = cursor.fetchone()[0]
-            conn.close()
-            return 1.0 if count > 0 else 0.0
-        except Exception as exc:
-            logger.error(f"Self-plagiarism check failed: {exc}")
-            return 0.0
-
-    def _store_fingerprint(
-        self,
-        fingerprint: str,
-        miner_hotkey: str,
-        challenge_id: str,
-    ) -> None:
-        """Store fingerprint in DB."""
-        if not fingerprint:
-            return
-        try:
-            conn = sqlite3.connect(self._db_path)
-            conn.execute(
-                "INSERT INTO fingerprints (miner_hotkey, challenge_id, fingerprint) "
-                "VALUES (?, ?, ?)",
-                (miner_hotkey, challenge_id, fingerprint),
-            )
-            conn.commit()
-            conn.close()
-        except Exception as exc:
-            logger.error(f"Fingerprint storage failed: {exc}")
-            return
-
-        self._store_count += 1
-        if self._store_count % 100 == 0:
-            self._prune_old_entries()
-
-    def _prune_old_entries(self) -> None:
-        """Delete entries older than the most recent 10000 rows."""
-        try:
-            conn = sqlite3.connect(self._db_path)
-            conn.execute(
-                "DELETE FROM fingerprints WHERE id NOT IN ("
-                "SELECT id FROM fingerprints ORDER BY id DESC LIMIT 10000"
-                ")"
-            )
-            conn.commit()
-            conn.close()
-            logger.debug("Pruned old fingerprint entries; kept last 10000.")
-        except Exception as exc:
-            logger.error(f"Fingerprint pruning failed: {exc}")
+        """Clear per-round embedding cache after scoring completes."""
+        self._round_embeddings.clear()

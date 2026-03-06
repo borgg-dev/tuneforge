@@ -171,7 +171,9 @@ class TestTrainingLoop:
 
             # Load into a fresh PreferenceHead
             head = PreferenceHead()
-            state = torch.load(out_path, map_location="cpu", weights_only=True)
+            raw = torch.load(out_path, map_location="cpu", weights_only=True)
+            # New format: {"state_dict": ..., "val_accuracy": ..., "embedding_dim": ...}
+            state = raw["state_dict"] if isinstance(raw, dict) and "state_dict" in raw else raw
             head.load_state_dict(state)
 
             # Verify forward pass works

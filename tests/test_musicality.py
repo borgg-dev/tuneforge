@@ -39,6 +39,7 @@ class TestMusicalityKeys:
         expected = {
             "pitch_stability",
             "harmonic_progression",
+            "chord_coherence",
             "rhythmic_groove",
             "arrangement_sophistication",
         }
@@ -67,6 +68,7 @@ class TestMusicalityKeys:
         expected = {
             "pitch_stability",
             "harmonic_progression",
+            "chord_coherence",
             "rhythmic_groove",
             "arrangement_sophistication",
         }

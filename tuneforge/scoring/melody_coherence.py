@@ -137,18 +137,16 @@ class MelodyCoherenceScorer:
     @staticmethod
     def _score_contour_quality(audio: np.ndarray, sr: int, librosa) -> float:
         """
-        Score based on phrase-level melodic contour shape.
+        Score based on pitch contour smoothness and periodicity.
 
-        Voiced f0 is segmented into phrases (split at unvoiced gaps longer
-        than 0.2 seconds).  Each phrase is classified as arch, ascending,
-        descending, or flat — all considered valid musical shapes.
+        Extracts F0 via pyin on harmonic-separated audio and measures:
+        1. Smoothness (weight 0.5): how smooth are frame-to-frame pitch
+           transitions?  Bell curve centered at 1.0 semitone std of diffs.
+        2. Periodicity (weight 0.5): autocorrelation of semitone sequence
+           to detect melodic repetition in the mid-lag range.
 
-        Additionally, phrase-level autocorrelation of the f0 contour is used
-        to reward moderate periodicity (0.3-0.7), which indicates musically
-        coherent repetition.
-
-        Returns 0.0 if audio is shorter than 0.5 seconds or no phrases are
-        found.
+        Returns 0.0 if audio is shorter than 0.5 seconds or insufficient
+        voiced frames are found.
         """
         try:
             duration = len(audio) / sr
@@ -168,66 +166,34 @@ class MelodyCoherenceScorer:
             if f0 is None or len(f0) == 0:
                 return 0.0
 
-            # Determine hop length used by pyin (default is sr // 4 in
-            # older librosa, 512 in newer — compute from output length)
-            hop_duration = duration / len(f0) if len(f0) > 1 else 0.01
-            gap_threshold_frames = max(1, int(0.2 / hop_duration))
-
-            # Segment into phrases
-            phrases: list[np.ndarray] = []
-            current_phrase: list[float] = []
-            gap_count = 0
-
-            for i, val in enumerate(f0):
-                if np.isnan(val):
-                    gap_count += 1
-                    if gap_count >= gap_threshold_frames and current_phrase:
-                        phrases.append(np.array(current_phrase))
-                        current_phrase = []
-                else:
-                    gap_count = 0
-                    current_phrase.append(val)
-
-            if current_phrase:
-                phrases.append(np.array(current_phrase))
-
-            if not phrases:
+            # Get voiced frames
+            voiced = f0[voiced_flag] if voiced_flag is not None else f0[~np.isnan(f0)]
+            if len(voiced) < 4:
                 return 0.0
 
-            # Classify each phrase contour
-            identifiable = 0
-            for phrase in phrases:
-                if len(phrase) < 3:
-                    continue
-                mid = len(phrase) // 2
-                first_half_trend = phrase[mid] - phrase[0]
-                second_half_trend = phrase[-1] - phrase[mid]
+            # Convert to semitones relative to first note
+            reference = voiced[0]
+            if reference < 1e-6:
+                return 0.0
+            semitones = 12.0 * np.log2(voiced / reference + 1e-10)
 
-                # Arch: rises then falls
-                is_arch = first_half_trend > 0 and second_half_trend < 0
-                # Ascending
-                is_ascending = phrase[-1] > phrase[0]
-                # Descending
-                is_descending = phrase[-1] < phrase[0]
-                # Flat: small total variation
-                pitch_range = np.max(phrase) - np.min(phrase)
-                is_flat = pitch_range < (phrase[0] * 0.05 + 1e-3)
+            # Compute pitch diffs
+            diffs = np.abs(np.diff(semitones))
 
-                if is_arch or is_ascending or is_descending or is_flat:
-                    identifiable += 1
+            # --- Smoothness component (weight 0.5) ---
+            # Std of absolute diffs; bell curve centered at 1.0 semitone
+            std_diffs = float(np.std(diffs)) if len(diffs) > 0 else 0.0
+            smoothness_score = float(np.exp(-2.0 * (std_diffs - 1.0) ** 2))
 
-            shape_score = identifiable / len(phrases) if phrases else 0.0
-
-            # Autocorrelation of the voiced f0 contour for periodicity
-            voiced_f0 = f0[~np.isnan(f0)]
-            if len(voiced_f0) > 10:
-                centred = voiced_f0 - np.mean(voiced_f0)
+            # --- Periodicity component (weight 0.5) ---
+            # Autocorrelation of semitone sequence, peak in middle range
+            if len(semitones) > 10:
+                centred = semitones - np.mean(semitones)
                 autocorr = np.correlate(centred, centred, mode="full")
                 autocorr = autocorr[len(autocorr) // 2:]
                 if autocorr[0] > 0:
                     autocorr = autocorr / autocorr[0]
-                # Find peak autocorrelation in the mid-range
-                # (skip lag 0, look at lags 10% to 50% of length)
+                # Look at lags 10%-50% of length
                 start = max(1, len(autocorr) // 10)
                 end = len(autocorr) // 2
                 if start < end:
@@ -241,7 +207,7 @@ class MelodyCoherenceScorer:
             else:
                 periodicity_score = 0.0
 
-            combined = 0.6 * shape_score + 0.4 * periodicity_score
+            combined = 0.5 * smoothness_score + 0.5 * periodicity_score
             return float(np.clip(combined, 0.0, 1.0))
         except Exception:
             return 0.0

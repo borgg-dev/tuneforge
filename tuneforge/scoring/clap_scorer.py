@@ -19,6 +19,12 @@ class CLAPScorer:
         self._model_name = model_name
         self._model: torch.nn.Module | None = None
         self._processor = None
+        self._last_embedding: np.ndarray | None = None
+
+    @property
+    def last_embedding(self) -> np.ndarray | None:
+        """Last computed audio embedding (for reuse by FAD/plagiarism)."""
+        return self._last_embedding
 
     def _load(self) -> None:
         """Lazy-load CLAP model and processor."""
@@ -94,6 +100,9 @@ class CLAPScorer:
             with torch.no_grad():
                 audio_out = self._model.get_audio_features(**audio_inputs)
                 audio_embeds = audio_out if isinstance(audio_out, torch.Tensor) else audio_out.pooler_output
+
+            # Cache raw audio embedding for reuse by FAD/plagiarism scorers
+            self._last_embedding = audio_embeds.cpu().numpy().flatten()
 
             # Cosine similarity → [0, 1] via calibrated range mapping
             text_embeds = torch.nn.functional.normalize(text_embeds, dim=-1)

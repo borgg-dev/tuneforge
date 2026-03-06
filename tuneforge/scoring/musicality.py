@@ -17,21 +17,26 @@ Genre-aware: accepts an optional genre string to adjust targets via
 import numpy as np
 from loguru import logger
 
+from tuneforge.scoring.chord_coherence import ChordCoherenceScorer
 from tuneforge.scoring.genre_profiles import GenreProfile, get_genre_profile
 
 # ---------------------------------------------------------------------------
 # Sub-metric weights (must sum to 1.0)
 # ---------------------------------------------------------------------------
 MUSICALITY_WEIGHTS: dict[str, float] = {
-    "pitch_stability": 0.30,
-    "harmonic_progression": 0.25,
-    "rhythmic_groove": 0.25,
-    "arrangement_sophistication": 0.20,
+    "pitch_stability": 0.25,
+    "harmonic_progression": 0.20,
+    "chord_coherence": 0.15,
+    "rhythmic_groove": 0.22,
+    "arrangement_sophistication": 0.18,
 }
 
 
 class MusicalityScorer:
     """Assess musical content quality using MIR analysis."""
+
+    def __init__(self) -> None:
+        self._chord = ChordCoherenceScorer()
 
     def score(self, audio: np.ndarray, sr: int, genre: str = "") -> dict[str, float]:
         """
@@ -55,9 +60,14 @@ class MusicalityScorer:
 
             profile = get_genre_profile(genre) if genre else GenreProfile(family="default")
 
+            # Compute chord coherence via dedicated scorer
+            chord_scores = self._chord.score(audio, sr)
+            chord_coherence = self._chord.aggregate(chord_scores)
+
             return {
                 "pitch_stability": self._score_pitch_stability(audio, sr, librosa, profile),
                 "harmonic_progression": self._score_harmonic_progression(audio, sr, librosa),
+                "chord_coherence": chord_coherence,
                 "rhythmic_groove": self._score_rhythmic_groove(audio, sr, librosa, profile),
                 "arrangement_sophistication": self._score_arrangement_sophistication(audio, sr, librosa, profile),
             }

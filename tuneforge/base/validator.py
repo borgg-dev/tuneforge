@@ -229,16 +229,19 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
 
     def update_scores(self, uids: list[int], rewards: list[float]) -> None:
         """
-        Update miner scores with exponential moving average.
+        Store raw reward scores for weight setting.
+
+        EMA smoothing is handled by MinerLeaderboard — this array
+        just holds the latest raw reward for each UID so the base
+        weight-setting logic has something to work with.
 
         Args:
             uids: List of miner UIDs.
-            rewards: Corresponding reward values (0.0 – 1.0).
+            rewards: Corresponding reward values (0.0 - 1.0).
         """
-        alpha = 0.1
         for uid, reward in zip(uids, rewards):
             if 0 <= uid < len(self.scores):
-                self.scores[uid] = alpha * reward + (1 - alpha) * self.scores[uid]
+                self.scores[uid] = reward
         logger.debug(f"Updated scores for {len(uids)} miners")
 
     # ------------------------------------------------------------------

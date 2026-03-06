@@ -107,9 +107,7 @@ class TestFullCycle:
             lb.update(2, 0.50)
             lb.update(3, 0.30)
 
-        # This will fail because MockSubtensor doesn't have bt.utils
-        # but we can verify the flow up to the chain call
-        assert lb.is_warmed_up(0)
+        # Verify the leaderboard has meaningful weights after 15 rounds
         assert lb.get_weight(0) > 0
 
         all_weights = lb.get_all_weights()

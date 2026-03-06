@@ -47,12 +47,16 @@ def path_to_key(wav_path: str) -> str:
 def load_pairs(
     annotations_path: str,
     embeddings_path: str,
+    dual: bool = False,
 ) -> list[tuple[np.ndarray, np.ndarray, float]]:
     """
     Load paired training examples from annotations and embedding cache.
 
     Returns list of (embedding_preferred, embedding_rejected, target) tuples.
     Target is always 1.0 (preferred should score higher).
+
+    When dual=True, expects both ``{key}_clap`` (512-dim) and ``{key}_mert``
+    (768-dim) keys in the NPZ and concatenates them into 1280-dim vectors.
 
     Skips entries where preferred=="skip" or embeddings are missing.
     Raises ValueError if fewer than 10 valid pairs found.
@@ -102,15 +106,29 @@ def load_pairs(
             pref_key = path_to_key(preferred_path)
             rej_key = path_to_key(rejected_path)
 
-            if pref_key not in available_keys:
-                skipped += 1
-                continue
-            if rej_key not in available_keys:
-                skipped += 1
-                continue
+            if dual:
+                # Dual mode: need both _clap and _mert suffixed keys
+                pref_clap = f"{pref_key}_clap"
+                pref_mert = f"{pref_key}_mert"
+                rej_clap = f"{rej_key}_clap"
+                rej_mert = f"{rej_key}_mert"
 
-            emb_pref = embeddings[pref_key]
-            emb_rej = embeddings[rej_key]
+                if not {pref_clap, pref_mert, rej_clap, rej_mert} <= available_keys:
+                    skipped += 1
+                    continue
+
+                emb_pref = np.concatenate([embeddings[pref_clap], embeddings[pref_mert]])
+                emb_rej = np.concatenate([embeddings[rej_clap], embeddings[rej_mert]])
+            else:
+                if pref_key not in available_keys:
+                    skipped += 1
+                    continue
+                if rej_key not in available_keys:
+                    skipped += 1
+                    continue
+
+                emb_pref = embeddings[pref_key]
+                emb_rej = embeddings[rej_key]
 
             pairs.append((emb_pref, emb_rej, 1.0))
 
@@ -147,6 +165,7 @@ def train(
     seed: int = 42,
     output_path: str = "preference_head.pt",
     device: str | None = None,
+    dual: bool = False,
 ) -> dict:
     """
     Train PreferenceHead using Bradley-Terry pairwise loss.
@@ -178,9 +197,16 @@ def train(
     print(f"Training: {len(train_pairs)} pairs, Validation: {len(val_pairs)} pairs")
 
     # Build model
-    from tuneforge.scoring.preference_model import PreferenceHead
+    if dual:
+        from tuneforge.scoring.preference_model import DualPreferenceHead
 
-    model = PreferenceHead()
+        model = DualPreferenceHead()
+        embedding_dim = 1280
+    else:
+        from tuneforge.scoring.preference_model import PreferenceHead
+
+        model = PreferenceHead()
+        embedding_dim = 512
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -291,10 +317,15 @@ def train(
                 )
                 break
 
-    # Save best checkpoint
+    # Save best checkpoint with metadata
     if best_state is not None:
-        torch.save(best_state, output_path)
-        print(f"\nSaved checkpoint -> {output_path} (val_acc={best_val_acc:.3f})")
+        checkpoint = {
+            "state_dict": best_state,
+            "val_accuracy": best_val_acc,
+            "embedding_dim": embedding_dim,
+        }
+        torch.save(checkpoint, output_path)
+        print(f"\nSaved checkpoint -> {output_path} (val_acc={best_val_acc:.3f}, dim={embedding_dim})")
     else:
         print("\nWARNING: No checkpoint saved (no improvement during training)")
 
@@ -375,6 +406,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=42,
         help="Random seed (default: 42).",
     )
+    parser.add_argument(
+        "--dual",
+        action="store_true",
+        default=False,
+        help="Use dual-embedding mode (CLAP 512 + MERT 768 = 1280-dim input).",
+    )
     return parser.parse_args(argv)
 
 
@@ -386,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Loading embeddings from {args.embeddings}")
 
     try:
-        pairs = load_pairs(args.annotations, args.embeddings)
+        pairs = load_pairs(args.annotations, args.embeddings, dual=args.dual)
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -407,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             val_split=args.val_split,
             seed=args.seed,
             output_path=args.output,
+            dual=args.dual,
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)

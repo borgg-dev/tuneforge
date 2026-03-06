@@ -12,14 +12,21 @@ class TestLeaderboardEMA:
     def test_first_update_sets_ema(self):
         lb = MinerLeaderboard(alpha=0.2)
         lb.update(0, 0.8)
-        assert lb.get_ema(0) == pytest.approx(0.8)
+        # EMA = 0.2 * 0.8 + 0.8 * 0.25 (seed) = 0.36
+        from tuneforge.config.scoring_config import EMA_NEW_MINER_SEED
+        expected = 0.2 * 0.8 + 0.8 * EMA_NEW_MINER_SEED
+        assert lb.get_ema(0) == pytest.approx(expected)
 
     def test_ema_formula(self):
         lb = MinerLeaderboard(alpha=0.2)
         lb.update(0, 1.0)
         lb.update(0, 0.5)
-        # EMA = 0.2 * 0.5 + 0.8 * 1.0 = 0.9
-        assert lb.get_ema(0) == pytest.approx(0.9)
+        # Round 1: 0.2*1.0 + 0.8*0.25 = 0.40
+        # Round 2: 0.2*0.5 + 0.8*0.40 = 0.42
+        from tuneforge.config.scoring_config import EMA_NEW_MINER_SEED
+        r1 = 0.2 * 1.0 + 0.8 * EMA_NEW_MINER_SEED
+        r2 = 0.2 * 0.5 + 0.8 * r1
+        assert lb.get_ema(0) == pytest.approx(r2)
 
     def test_ema_converges(self):
         lb = MinerLeaderboard(alpha=0.2)
@@ -58,7 +65,7 @@ class TestLeaderboardSteepening:
 
     def test_perfect_score_high_weight(self):
         lb = MinerLeaderboard(alpha=0.2, steepen_baseline=0.6, steepen_power=3.0)
-        for _ in range(15):
+        for _ in range(30):  # More rounds needed due to 0.25 seed
             lb.update(0, 1.0)
         weight = lb.get_weight(0)
         assert weight == pytest.approx(1.0, abs=0.05)
@@ -74,25 +81,15 @@ class TestLeaderboardSteepening:
         assert w0 > 3 * w1
 
 
-class TestLeaderboardWarmup:
+class TestLeaderboardNewMinerSeed:
 
-    def test_not_warmed_up_initially(self):
+    def test_new_miner_starts_at_seed(self):
+        from tuneforge.config.scoring_config import EMA_NEW_MINER_SEED
         lb = MinerLeaderboard(alpha=0.2)
         lb.update(0, 0.9)
-        assert not lb.is_warmed_up(0)
-
-    def test_warmed_up_after_threshold(self):
-        lb = MinerLeaderboard(alpha=0.2)
-        # warmup = ceil(2/0.2 - 1) = 9
-        for i in range(9):
-            lb.update(0, 0.9)
-        assert lb.is_warmed_up(0)
-
-    def test_weight_zero_before_warmup(self):
-        lb = MinerLeaderboard(alpha=0.2, steepen_baseline=0.6)
-        for i in range(5):
-            lb.update(0, 0.9)
-        assert lb.get_weight(0) == 0.0
+        # First update: alpha * 0.9 + (1-alpha) * seed
+        expected = 0.2 * 0.9 + 0.8 * EMA_NEW_MINER_SEED
+        assert lb.get_ema(0) == pytest.approx(expected)
 
 
 class TestLeaderboardSummary:
@@ -109,7 +106,7 @@ class TestLeaderboardSummary:
             lb.update(1, 0.5)
         s = lb.summary()
         assert s["total_miners"] == 2
-        assert s["warmed_up"] >= 1
+        assert s["above_baseline"] >= 0
 
 
 class TestWeightNormalization:

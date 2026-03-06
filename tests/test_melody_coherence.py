@@ -151,7 +151,7 @@ class TestIntervalQuality:
 
 
 class TestContourQuality:
-    """Contour quality: melodic shapes score reasonably; noise scores low."""
+    """Contour quality: smooth melodies score higher than random; noise scores low."""
 
     @_skip_librosa
     def test_melody_has_contour(self, scorer, sample_audio_melody, sample_rate):
@@ -169,6 +169,39 @@ class TestContourQuality:
         short = np.sin(np.linspace(0, 0.3, int(sample_rate * 0.3))).astype(np.float32)
         scores = scorer.score(short, sample_rate)
         assert scores["contour_quality"] == 0.0
+
+    @_skip_librosa
+    def test_smooth_vs_random_pitch(self, scorer, sample_rate):
+        """Smooth stepwise melody should score differently from random jumps."""
+        sr = sample_rate
+        # Smooth: gentle ascending scale
+        smooth_freqs = [261.63, 277.18, 293.66, 311.13, 329.63]
+        smooth_segments = []
+        for freq in smooth_freqs * 4:
+            t = np.linspace(0, 0.25, int(sr * 0.25), endpoint=False)
+            smooth_segments.append(0.6 * np.sin(2 * np.pi * freq * t))
+        smooth_audio = np.concatenate(smooth_segments).astype(np.float32)
+
+        # Random: large pitch jumps
+        rng = np.random.default_rng(123)
+        random_freqs = rng.uniform(200, 2000, 20)
+        random_segments = []
+        for freq in random_freqs:
+            t = np.linspace(0, 0.25, int(sr * 0.25), endpoint=False)
+            random_segments.append(0.6 * np.sin(2 * np.pi * freq * t))
+        random_audio = np.concatenate(random_segments).astype(np.float32)
+
+        smooth_scores = scorer.score(smooth_audio, sr)
+        random_scores = scorer.score(random_audio, sr)
+
+        # They should produce different contour quality scores
+        # (not both ~1.0 as with the old buggy implementation)
+        assert smooth_scores["contour_quality"] != pytest.approx(
+            random_scores["contour_quality"], abs=0.05
+        ), (
+            f"Smooth ({smooth_scores['contour_quality']:.3f}) and random "
+            f"({random_scores['contour_quality']:.3f}) should differ"
+        )
 
 
 class TestRepetitionStructure:

@@ -13,6 +13,7 @@ import numpy as np
 from loguru import logger
 
 from tuneforge.scoring.genre_profiles import GenreProfile, get_genre_profile
+from tuneforge.scoring.stereo_quality import StereoQualityScorer
 
 
 def librosa_resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -22,17 +23,21 @@ def librosa_resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndar
 
 
 PRODUCTION_WEIGHTS: dict[str, float] = {
-    "spectral_balance": 0.30,
-    "frequency_fullness": 0.25,
-    "loudness_consistency": 0.25,
-    "dynamic_expressiveness": 0.20,
+    "spectral_balance": 0.25,
+    "frequency_fullness": 0.20,
+    "loudness_consistency": 0.20,
+    "dynamic_expressiveness": 0.15,
+    "stereo_quality": 0.20,
 }
 
 
 class ProductionQualityScorer:
     """Assess production/mastering quality of generated audio."""
 
-    def score(self, audio: np.ndarray, sr: int, genre: str = "") -> dict[str, float]:
+    def __init__(self) -> None:
+        self._stereo = StereoQualityScorer()
+
+    def score(self, audio: np.ndarray, sr: int, genre: str = "", raw_audio: np.ndarray | None = None) -> dict[str, float]:
         """
         Compute per-metric production quality scores.
 
@@ -40,13 +45,23 @@ class ProductionQualityScorer:
             audio: 1-D or 2-D float waveform.
             sr: Sample rate in Hz.
             genre: Optional genre string for genre-aware target adjustment.
+            raw_audio: Optional multichannel audio for stereo analysis.
+                       If provided and 2-channel, used for stereo quality scoring.
 
         Returns:
             Dict with keys: spectral_balance, frequency_fullness,
-            loudness_consistency, dynamic_expressiveness.  All values in [0, 1].
+            loudness_consistency, dynamic_expressiveness, stereo_quality.
+            All values in [0, 1].
         """
         try:
             import librosa
+
+            # Compute stereo quality before downmixing
+            if raw_audio is not None and raw_audio.ndim == 2:
+                stereo_scores = self._stereo.score(raw_audio, sr)
+                stereo_quality = self._stereo.aggregate(stereo_scores)
+            else:
+                stereo_quality = 0.5  # Neutral default when no multichannel data
 
             if audio.ndim > 1:
                 audio = audio.mean(axis=0)
@@ -59,6 +74,7 @@ class ProductionQualityScorer:
                 "frequency_fullness": self._score_frequency_fullness(audio, sr, librosa),
                 "loudness_consistency": self._score_loudness_consistency(audio, sr, librosa, profile),
                 "dynamic_expressiveness": self._score_dynamic_expressiveness(audio, sr, librosa, profile),
+                "stereo_quality": stereo_quality,
             }
         except Exception as exc:
             logger.error(f"Production quality scoring failed: {exc}")

@@ -4,31 +4,36 @@ Production reward model for TuneForge.
 Combines signal sources into a single 0-1 reward per miner response.
 Quality is the primary driver; prompt adherence is secondary:
 
-Prompt adherence:
-- CLAP text-audio similarity   (30%)
+Prompt adherence (20%):
+- CLAP text-audio similarity   (20%)
 
-Music quality (60% total):
-- Musicality metrics            (10%) — pitch, harmony, rhythm, arrangement
-- Audio quality metrics         (6%)  — signal-level analysis
-- Production quality metrics    (8%)  — spectral balance, LUFS loudness, dynamics
+Attribute verification (10%):
+- Tempo, key, instruments      (10%)
+
+Music quality (54% total):
+- Musicality metrics            (10%) — pitch, harmony, rhythm, arrangement, chords
+- Neural quality (MERT)         (8%)  — learned music representations
 - Melody coherence              (7%)  — melodic intervals, contour, structure
-- Neural quality (MERT)         (10%) — learned music representations
-- Preference model              (6%)  — perceptual quality (MERT-enhanced heuristic)
 - Structural completeness       (7%)  — section detection, song form
-- Vocal quality                 (6%)  — vocal presence, clarity, pitch (genre-aware)
+- Harmonic quality              (6%)  — vocal presence, clarity, formant structure
+- Production quality metrics    (6%)  — spectral balance, loudness, dynamics, stereo
+- Preference model              (6%)  — learned human preference (auto-scales 2-10%)
+- Audio quality metrics         (4%)  — signal-level analysis
+- Perceptual quality            (4%)  — spectral MOS estimator
+- Neural codec quality          (2%)  — EnCodec reconstruction quality
 
-Other:
+Other (10%):
 - Diversity                     (5%)
 - Speed                         (5%)
-- Attribute verification        (0%  — available; raise via TF_WEIGHT_ATTRIBUTE)
 
 Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
 - Artifact penalty              — spectral discontinuities, clipping, loops
+- FAD penalty                   — per-miner Frechet Audio Distance from real music
 
 Hard penalties override composite scores (plagiarism, silence, timeout).
 
-Anti-gaming: per-round weight perturbation seeded by challenge_id.
+Anti-gaming: per-round weight perturbation (±30%) with scorer dropout (10%).
 """
 
 import hashlib
@@ -41,6 +46,7 @@ from loguru import logger
 from tuneforge.base.protocol import MusicGenerationSynapse
 from tuneforge.config.scoring_config import (
     SCORING_WEIGHTS,
+    SCORER_DROPOUT_RATE,
     SILENCE_THRESHOLD,
     DURATION_TOLERANCE,
     DURATION_TOLERANCE_MAX,
@@ -50,20 +56,28 @@ from tuneforge.config.scoring_config import (
     SPEED_MAX_SECONDS,
     GENERATION_TIMEOUT,
     WEIGHT_PERTURBATION,
+    FAD_WINDOW_SIZE,
+    FAD_REFERENCE_STATS_PATH,
+    FAD_PENALTY_MIDPOINT,
+    FAD_PENALTY_STEEPNESS,
+    FAD_PENALTY_FLOOR,
 )
 from tuneforge.scoring.artifact_detector import ArtifactDetector
 from tuneforge.scoring.attribute_verifier import AttributeVerifier
 from tuneforge.scoring.audio_quality import AudioQualityScorer
 from tuneforge.scoring.clap_scorer import CLAPScorer
 from tuneforge.scoring.diversity import DiversityScorer
+from tuneforge.scoring.fad_scorer import FADScorer
+from tuneforge.scoring.harmonic_quality import HarmonicQualityScorer
 from tuneforge.scoring.melody_coherence import MelodyCoherenceScorer
 from tuneforge.scoring.musicality import MusicalityScorer
+from tuneforge.scoring.neural_codec_quality import NeuralCodecQualityScorer
 from tuneforge.scoring.neural_quality import NeuralQualityScorer
+from tuneforge.scoring.perceptual_quality import PerceptualQualityScorer
 from tuneforge.scoring.plagiarism import PlagiarismDetector
 from tuneforge.scoring.preference_model import PreferenceModel
 from tuneforge.scoring.production_quality import ProductionQualityScorer
 from tuneforge.scoring.structural_completeness import StructuralCompletenessScorer
-from tuneforge.scoring.vocal_quality import VocalQualityScorer
 from tuneforge.settings import Settings
 
 
@@ -78,17 +92,30 @@ class ProductionRewardModel:
         self._melody = MelodyCoherenceScorer()
         self._neural = NeuralQualityScorer()
         self._structural = StructuralCompletenessScorer()
-        self._vocal = VocalQualityScorer()
+        self._vocal = HarmonicQualityScorer()
         self._artifact = ArtifactDetector()
-        self._attribute = AttributeVerifier()
+        self._attribute = AttributeVerifier(clap_scorer=self._clap)
+        self._perceptual = PerceptualQualityScorer()
+        self._neural_codec = NeuralCodecQualityScorer()
         self._preference = PreferenceModel(
             model_path=config.preference_model_path,
+            clap_scorer=self._clap,
             neural_scorer=self._neural,
         )
-        self._plagiarism = PlagiarismDetector(db_path="fingerprints.db")
+        self._plagiarism = PlagiarismDetector(
+            clap_scorer=self._clap,
+            reference_embeddings_path=getattr(config, "reference_embeddings_path", None),
+        )
+        self._fad = FADScorer(
+            window_size=FAD_WINDOW_SIZE,
+            reference_stats_path=FAD_REFERENCE_STATS_PATH or None,
+            penalty_midpoint=FAD_PENALTY_MIDPOINT,
+            penalty_steepness=FAD_PENALTY_STEEPNESS,
+            penalty_floor=FAD_PENALTY_FLOOR,
+        )
         self._diversity = DiversityScorer()
         self._config = config
-        logger.info("ProductionRewardModel initialised")
+        logger.info("ProductionRewardModel initialised (14 scorers + 3 penalties)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,7 +139,7 @@ class ProductionRewardModel:
             Composite reward in [0, 1].
         """
         # --- Decode audio ---
-        audio, sr = self._decode_audio(synapse)
+        audio, sr, raw_audio = self._decode_audio(synapse)
         if audio is None:
             logger.debug("No audio in response — score 0")
             return 0.0
@@ -142,7 +169,7 @@ class ProductionRewardModel:
         quality_score = self._quality.aggregate(quality_scores)
         musicality_scores = self._musicality.score(audio, sr, genre=genre)
         musicality_score = self._musicality.aggregate(musicality_scores)
-        production_scores = self._production.score(audio, sr, genre=genre)
+        production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
         production_score = self._production.aggregate(production_scores)
         melody_scores = self._melody.score(audio, sr)
         melody_score = self._melody.aggregate(melody_scores)
@@ -154,6 +181,10 @@ class ProductionRewardModel:
         vocal_score = self._vocal.aggregate(vocal_scores)
         attribute_score = self._attribute.verify_all(audio, sr, synapse)
         preference_score = self._preference.score(audio, sr)
+        perceptual_scores = self._perceptual.score(audio, sr)
+        perceptual_score = self._perceptual.aggregate(perceptual_scores)
+        neural_codec_scores = self._neural_codec.score(audio, sr)
+        neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
         speed_score = self._speed_score(synapse)
 
         # Diversity computed externally per-batch; use 0.5 default for single
@@ -178,6 +209,8 @@ class ProductionRewardModel:
             + weights["vocal"] * vocal_score
             + weights["attribute"] * attribute_score
             + weights["preference"] * preference_score
+            + weights["perceptual"] * perceptual_score
+            + weights["neural_codec"] * neural_codec_score
             + weights["diversity"] * diversity_score
             + weights["speed"] * speed_score
         )
@@ -190,6 +223,7 @@ class ProductionRewardModel:
             f"melody={melody_score:.3f} neural={neural_score:.3f} "
             f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
             f"attr={attribute_score:.3f} pref={preference_score:.3f} "
+            f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
             f"speed={speed_score:.3f} div={diversity_score:.3f} "
             f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} → {final:.3f}"
         )
@@ -221,7 +255,7 @@ class ProductionRewardModel:
         rewards: list[float] = []
         try:
             for i, synapse in enumerate(synapses):
-                audio, sr = self._decode_audio(synapse)
+                audio, sr, raw_audio = self._decode_audio(synapse)
                 hotkey = miner_hotkeys[i] if i < len(miner_hotkeys) else ""
 
                 if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
@@ -243,7 +277,7 @@ class ProductionRewardModel:
                 quality_score = self._quality.aggregate(quality_scores)
                 musicality_scores = self._musicality.score(audio, sr, genre=genre)
                 musicality_score = self._musicality.aggregate(musicality_scores)
-                production_scores = self._production.score(audio, sr, genre=genre)
+                production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
                 production_score = self._production.aggregate(production_scores)
                 melody_scores = self._melody.score(audio, sr)
                 melody_score = self._melody.aggregate(melody_scores)
@@ -255,11 +289,20 @@ class ProductionRewardModel:
                 vocal_score = self._vocal.aggregate(vocal_scores)
                 attribute_score = self._attribute.verify_all(audio, sr, synapse)
                 preference_score = self._preference.score(audio, sr)
+                perceptual_scores = self._perceptual.score(audio, sr)
+                perceptual_score = self._perceptual.aggregate(perceptual_scores)
+                neural_codec_scores = self._neural_codec.score(audio, sr)
+                neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
                 speed_score = self._speed_score(synapse)
                 diversity_score = diversity_scores[i]
 
                 duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
                 artifact_penalty = self._artifact.detect(audio, sr)
+
+                # FAD: update miner embedding and get penalty
+                clap_emb = self._clap.last_embedding
+                self._fad.update_miner_embedding(hotkey, clap_emb)
+                fad_penalty = self._fad.get_fad_penalty(hotkey)
 
                 weights = self._perturb_weights(challenge_id)
 
@@ -274,12 +317,14 @@ class ProductionRewardModel:
                     + weights["vocal"] * vocal_score
                     + weights["attribute"] * attribute_score
                     + weights["preference"] * preference_score
+                    + weights["perceptual"] * perceptual_score
+                    + weights["neural_codec"] * neural_codec_score
                     + weights["diversity"] * diversity_score
                     + weights["speed"] * speed_score
                 )
 
                 final = float(np.clip(
-                    composite * duration_penalty * artifact_penalty, 0.0, 1.0
+                    composite * duration_penalty * artifact_penalty * fad_penalty, 0.0, 1.0
                 ))
 
                 logger.debug(
@@ -288,8 +333,10 @@ class ProductionRewardModel:
                     f"melody={melody_score:.3f} neural={neural_score:.3f} "
                     f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
                     f"attr={attribute_score:.3f} pref={preference_score:.3f} "
+                    f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
                     f"speed={speed_score:.3f} div={diversity_score:.3f} "
-                    f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} → {final:.3f}"
+                    f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
+                    f"fad_pen={fad_penalty:.3f} → {final:.3f}"
                 )
 
                 rewards.append(final)
@@ -311,20 +358,30 @@ class ProductionRewardModel:
     _MAX_AUDIO_BYTES: int = 20 * 1024 * 1024
 
     @staticmethod
-    def _decode_audio(synapse: MusicGenerationSynapse) -> tuple[np.ndarray | None, int]:
-        """Decode audio bytes from synapse into numpy array."""
+    def _decode_audio(
+        synapse: MusicGenerationSynapse,
+    ) -> tuple[np.ndarray | None, int, np.ndarray | None]:
+        """Decode audio bytes from synapse into numpy array.
+
+        Returns:
+            (mono_audio, sample_rate, raw_multichannel_or_none)
+        """
         try:
             raw = synapse.deserialize()
             if raw is None:
-                return None, 0
+                return None, 0, None
             if len(raw) > ProductionRewardModel._MAX_AUDIO_BYTES:
                 logger.warning(
                     f"Audio payload too large ({len(raw)} bytes) — rejecting"
                 )
-                return None, 0
+                return None, 0, None
             import soundfile as sf
 
             audio, sr = sf.read(io.BytesIO(raw))
+
+            # Keep raw multichannel for stereo quality scoring
+            raw_audio = audio if audio.ndim > 1 else None
+
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
 
@@ -333,19 +390,19 @@ class ProductionRewardModel:
                 logger.warning(
                     f"Audio too long ({len(audio) / sr:.1f}s) — rejecting"
                 )
-                return None, 0
+                return None, 0, None
 
             audio = audio.astype(np.float32)
 
             # Reject audio containing NaN or Inf values (malicious payload)
             if not np.all(np.isfinite(audio)):
                 logger.warning("Audio contains NaN/Inf values — rejecting")
-                return None, 0
+                return None, 0, None
 
-            return audio, sr
+            return audio, sr, raw_audio
         except Exception as exc:
             logger.debug(f"Audio decode failed: {exc}")
-            return None, 0
+            return None, 0, None
 
     # ------------------------------------------------------------------
     # Penalty helpers
@@ -451,6 +508,12 @@ class ProductionRewardModel:
                 continue
             factor = 1.0 + rng.uniform(-WEIGHT_PERTURBATION, WEIGHT_PERTURBATION)
             perturbed[key] = base_weight * factor
+
+        # Scorer dropout: each non-zero scorer has a chance of being zeroed
+        if SCORER_DROPOUT_RATE > 0:
+            for key in list(perturbed.keys()):
+                if perturbed[key] > 0 and rng.random() < SCORER_DROPOUT_RATE:
+                    perturbed[key] = 0.0
 
         # Renormalize to sum to 1.0
         total = sum(perturbed.values())
