@@ -26,7 +26,6 @@ from tuneforge.base.validator import BaseValidatorNeuron
 from tuneforge.config.scoring_config import EMA_STATE_PATH, EMA_SAVE_INTERVAL
 from tuneforge.rewards.leaderboard import MinerLeaderboard
 from tuneforge.rewards.reward import ProductionRewardModel
-from tuneforge.rewards.scoring import TaskScorer
 from tuneforge.rewards.weight_setter import WeightSetter
 from tuneforge.settings import Settings, get_settings
 from tuneforge.validation.challenge_manager import ChallengeManager
@@ -61,7 +60,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         # Scoring pipeline
         self._reward_model = ProductionRewardModel(self.settings)
-        self._task_scorer = TaskScorer(self.settings)
         self._prompt_generator = PromptGenerator()
         self._leaderboard = MinerLeaderboard()
         self._leaderboard.load_state(EMA_STATE_PATH)
