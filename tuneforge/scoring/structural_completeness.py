@@ -128,9 +128,12 @@ class StructuralCompletenessScorer:
             expected = profile.structural_section_target * duration / 30.0
             expected = max(expected, 1.0)
 
-            score = float(
-                np.exp(-2.0 * (abs(n_sections - expected) / max(expected, 1)) ** 2)
-            )
+            # One-sided minimum: at least 1 section per 10s, no upper penalty
+            min_sections = max(1, int(expected * 0.5))
+            if n_sections >= min_sections:
+                score = min(1.0, 0.5 + 0.5 * min(n_sections / max(expected, 1), 1.5))
+            else:
+                score = max(0.0, n_sections / max(min_sections, 1))
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -186,11 +189,12 @@ class StructuralCompletenessScorer:
 
             mean_distance = float(np.mean(distances))
 
-            # Bell curve centred at genre-specific variety target
-            target = profile.structural_variety_target
-            score = float(
-                np.exp(-8.0 * (mean_distance - target) ** 2)
-            )
+            # One-sided minimum: sections should have at least some distinctness
+            min_distance = profile.structural_variety_target * 0.3
+            if mean_distance >= min_distance:
+                score = min(1.0, 0.5 + mean_distance * 2.0)
+            else:
+                score = max(0.0, mean_distance / (min_distance + 1e-8))
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -202,18 +206,21 @@ class StructuralCompletenessScorer:
         boundaries: list[int],
     ) -> float:
         """
-        Score based on whether first/last sections have gentler energy.
+        Score based on whether the track has intentional opening/closing.
 
-        Computes RMS energy for the first section, last section, and the
-        average of middle sections.  If an edge section has lower energy
-        than the middle (ratio < 0.8), it is considered a good intro or
-        outro.  Score = fraction of edges that are gentler.
+        Rather than requiring gentle intros/outros (which penalizes electronic
+        music, tracks with strong openings, etc.), this measures whether the
+        first and last sections are DIFFERENT from the middle — indicating
+        intentional arrangement rather than abrupt cut-off.
+
+        Any of these count as good intro/outro:
+        - Lower energy than middle (fade in/out)
+        - Different spectral characteristics (different instrument/texture)
+        - Gradual energy ramp (first/last quarter has increasing/decreasing RMS)
         """
         try:
             n_sections = len(boundaries) - 1
             if n_sections < 3:
-                # Need at least intro + body + outro (3 sections)
-                # With fewer sections, give a neutral score
                 return 0.5
 
             # Compute RMS per section
@@ -226,26 +233,51 @@ class StructuralCompletenessScorer:
                     rms = float(np.sqrt(np.mean(section_audio ** 2)))
                     section_rms.append(rms)
 
-            first_rms = section_rms[0]
-            last_rms = section_rms[-1]
             middle_rms_values = section_rms[1:-1]
-
             if not middle_rms_values:
                 return 0.5
 
             middle_avg_rms = float(np.mean(middle_rms_values))
-
             if middle_avg_rms < 1e-8:
                 return 0.5
 
-            # Count how many edges (first/last) are gentler than middle
-            gentle_count = 0
-            if first_rms / middle_avg_rms < 0.8:
-                gentle_count += 1
-            if last_rms / middle_avg_rms < 0.8:
-                gentle_count += 1
+            score = 0.0
 
-            score = gentle_count / 2.0
+            # Check first section: either gentle OR has energy ramp-up
+            first_audio = audio[boundaries[0]:boundaries[1]]
+            if len(first_audio) > 0:
+                first_ratio = section_rms[0] / middle_avg_rms
+                if first_ratio < 0.8:
+                    score += 0.5  # Gentle intro
+                elif len(first_audio) > 1024:
+                    # Check for ramp-up: compare first quarter vs last quarter
+                    q = len(first_audio) // 4
+                    rms_start = float(np.sqrt(np.mean(first_audio[:q] ** 2)))
+                    rms_end = float(np.sqrt(np.mean(first_audio[-q:] ** 2)))
+                    if rms_end > rms_start * 1.3:
+                        score += 0.5  # Building intro
+
+            # Check last section: either gentle OR has energy ramp-down
+            last_audio = audio[boundaries[-2]:boundaries[-1]]
+            if len(last_audio) > 0:
+                last_ratio = section_rms[-1] / middle_avg_rms
+                if last_ratio < 0.8:
+                    score += 0.5  # Gentle outro
+                elif len(last_audio) > 1024:
+                    q = len(last_audio) // 4
+                    rms_start = float(np.sqrt(np.mean(last_audio[:q] ** 2)))
+                    rms_end = float(np.sqrt(np.mean(last_audio[-q:] ** 2)))
+                    if rms_start > rms_end * 1.3:
+                        score += 0.5  # Fading outro
+
+            # Give partial credit for having any distinct edges
+            if score == 0.0:
+                # Even if not gentle/ramped, different energy level = intentional
+                first_diff = abs(section_rms[0] - middle_avg_rms) / (middle_avg_rms + 1e-8)
+                last_diff = abs(section_rms[-1] - middle_avg_rms) / (middle_avg_rms + 1e-8)
+                if first_diff > 0.3 or last_diff > 0.3:
+                    score = 0.3
+
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0

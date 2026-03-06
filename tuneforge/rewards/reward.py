@@ -2,38 +2,57 @@
 Production reward model for TuneForge.
 
 Combines signal sources into a single 0-1 reward per miner response.
-Quality is the primary driver; prompt adherence is secondary:
+Quality is the primary driver; prompt adherence is secondary.
 
-Prompt adherence (20%):
-- CLAP text-audio similarity   (20%)
+18 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
 
-Attribute verification (10%):
-- Tempo, key, instruments      (10%)
+Prompt adherence (15%):
+- CLAP text-audio similarity   (15%)  — upgraded to larger_clap_music
 
-Music quality (54% total):
-- Musicality metrics            (10%) — pitch, harmony, rhythm, arrangement, chords
-- Neural quality (MERT)         (8%)  — learned music representations
-- Melody coherence              (7%)  — melodic intervals, contour, structure
-- Structural completeness       (7%)  — section detection, song form
-- Harmonic quality              (6%)  — vocal presence, clarity, formant structure
-- Production quality metrics    (6%)  — spectral balance, loudness, dynamics, stereo
+Attribute verification (8%):
+- Tempo, key, instruments      (8%)
+
+Core music quality (42%):
+- Musicality metrics            (8%)  — pitch, harmony, rhythm, arrangement, chords
+- Neural quality (MERT)         (6%)  — learned music representations
+- Melody coherence              (5%)  — melodic intervals, contour, structure
+- Structural completeness       (5%)  — section detection, song form
+- Harmonic quality              (4%)  — vocal presence, clarity, formant structure
+- Production quality metrics    (5%)  — spectral balance, loudness, dynamics, stereo
 - Preference model              (6%)  — learned human preference (auto-scales 2-10%)
-- Audio quality metrics         (4%)  — signal-level analysis
-- Perceptual quality            (4%)  — spectral MOS estimator
+- Audio quality metrics         (3%)  — signal-level analysis
+
+NEW scorers addressing audit gaps (20%):
+- Timbral naturalness           (7%)  — spectral envelope, harmonic decay, transients
+- Vocal/lyrics quality          (5%)  — vocal clarity, lyrics intelligibility, pitch, sibilance
+- Mix separation                (4%)  — spectral clarity, frequency masking, spatial depth
+- Learned MOS                   (4%)  — multi-resolution perceptual quality estimation
+
+Perceptual quality (4%):
+- Perceptual quality            (2%)  — spectral MOS estimator
 - Neural codec quality          (2%)  — EnCodec reconstruction quality
 
-Other (10%):
-- Diversity                     (5%)
-- Speed                         (5%)
+Other (11%):
+- Diversity                     (8%)  — intra-miner + population-level diversity
+- Speed                         (3%)  — adjusted curve: 15s=1.0, 45s=0.3, >90s=0.0
 
 Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
 - Artifact penalty              — spectral discontinuities, clipping, loops
 - FAD penalty                   — per-miner Frechet Audio Distance from real music
+- Soft plagiarism penalty       — partial score reduction for near-matches (0.65-0.72)
 
 Hard penalties override composite scores (plagiarism, silence, timeout).
 
-Anti-gaming: per-round weight perturbation (±30%) with scorer dropout (10%).
+Multi-scale evaluation adjusts weights based on audio duration:
+- Short clips (<10s): emphasize production quality
+- Long clips (>30s): emphasize structural coherence + melodic development
+
+Anti-gaming:
+- Per-round weight perturbation (±30%) with SECRET seed (not challenge_id alone)
+- Scorer dropout (10%)
+- Canonical-form plagiarism detection (pitch/tempo normalized)
+- Population-level diversity bonus
 """
 
 import hashlib
@@ -61,6 +80,7 @@ from tuneforge.config.scoring_config import (
     FAD_PENALTY_MIDPOINT,
     FAD_PENALTY_STEEPNESS,
     FAD_PENALTY_FLOOR,
+    VALIDATOR_PERTURBATION_SECRET,
 )
 from tuneforge.scoring.artifact_detector import ArtifactDetector
 from tuneforge.scoring.attribute_verifier import AttributeVerifier
@@ -69,7 +89,10 @@ from tuneforge.scoring.clap_scorer import CLAPScorer
 from tuneforge.scoring.diversity import DiversityScorer
 from tuneforge.scoring.fad_scorer import FADScorer
 from tuneforge.scoring.harmonic_quality import HarmonicQualityScorer
+from tuneforge.scoring.learned_mos import LearnedMOSScorer
 from tuneforge.scoring.melody_coherence import MelodyCoherenceScorer
+from tuneforge.scoring.mix_separation import MixSeparationScorer
+from tuneforge.scoring.multi_scale import MultiScaleEvaluator
 from tuneforge.scoring.musicality import MusicalityScorer
 from tuneforge.scoring.neural_codec_quality import NeuralCodecQualityScorer
 from tuneforge.scoring.neural_quality import NeuralQualityScorer
@@ -78,6 +101,8 @@ from tuneforge.scoring.plagiarism import PlagiarismDetector
 from tuneforge.scoring.preference_model import PreferenceModel
 from tuneforge.scoring.production_quality import ProductionQualityScorer
 from tuneforge.scoring.structural_completeness import StructuralCompletenessScorer
+from tuneforge.scoring.timbral_naturalness import TimbralNaturalnessScorer
+from tuneforge.scoring.vocal_lyrics import VocalLyricsScorer
 from tuneforge.settings import Settings
 
 
@@ -114,8 +139,13 @@ class ProductionRewardModel:
             penalty_floor=FAD_PENALTY_FLOOR,
         )
         self._diversity = DiversityScorer()
+        self._timbral = TimbralNaturalnessScorer()
+        self._vocal_lyrics = VocalLyricsScorer()
+        self._mix_separation = MixSeparationScorer()
+        self._learned_mos = LearnedMOSScorer()
+        self._multi_scale = MultiScaleEvaluator()
         self._config = config
-        logger.info("ProductionRewardModel initialised (14 scorers + 3 penalties)")
+        logger.info("ProductionRewardModel initialised (18 scorers + 3 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -163,6 +193,7 @@ class ProductionRewardModel:
         # --- Component scores (genre-aware) ---
         genre = getattr(synapse, "genre", "") or ""
         challenge_id = getattr(synapse, "challenge_id", "") or ""
+        expected_lyrics = getattr(synapse, "lyrics", "") or ""
 
         clap_score = self._clap.score(audio, sr, synapse.prompt)
         quality_scores = self._quality.score(audio, sr, genre=genre)
@@ -187,6 +218,18 @@ class ProductionRewardModel:
         neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
         speed_score = self._speed_score(synapse)
 
+        # NEW scorers (Phase 2/3 audit fixes)
+        timbral_scores = self._timbral.score(audio, sr, genre=genre)
+        timbral_score = self._timbral.aggregate(timbral_scores)
+        vocal_lyrics_scores = self._vocal_lyrics.score(
+            audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+        )
+        vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
+        mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
+        mix_sep_score = self._mix_separation.aggregate(mix_sep_scores)
+        mos_scores = self._learned_mos.score(audio, sr)
+        mos_score = self._learned_mos.aggregate(mos_scores)
+
         # Diversity computed externally per-batch; use 0.5 default for single
         diversity_score = 0.5
 
@@ -194,25 +237,42 @@ class ProductionRewardModel:
         duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
         artifact_penalty = self._artifact.detect(audio, sr)
 
+        # --- Multi-scale weight adjustment ---
+        duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
+        scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
+
         # --- Per-round weight perturbation (anti-gaming) ---
-        weights = self._perturb_weights(challenge_id)
+        weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+
+        # Apply multi-scale multipliers to weights
+        for key in weights:
+            if key in scale_multipliers:
+                weights[key] *= scale_multipliers[key]
+        # Renormalize after multi-scale adjustment
+        total_w = sum(weights.values())
+        if total_w > 0:
+            weights = {k: v / total_w for k, v in weights.items()}
 
         # --- Weighted composite ---
         composite = (
-            weights["clap"] * clap_score
-            + weights["quality"] * quality_score
-            + weights["musicality"] * musicality_score
-            + weights["production"] * production_score
-            + weights["melody"] * melody_score
-            + weights["neural_quality"] * neural_score
-            + weights["structural"] * structural_score
-            + weights["vocal"] * vocal_score
-            + weights["attribute"] * attribute_score
-            + weights["preference"] * preference_score
-            + weights["perceptual"] * perceptual_score
-            + weights["neural_codec"] * neural_codec_score
-            + weights["diversity"] * diversity_score
-            + weights["speed"] * speed_score
+            weights.get("clap", 0) * clap_score
+            + weights.get("quality", 0) * quality_score
+            + weights.get("musicality", 0) * musicality_score
+            + weights.get("production", 0) * production_score
+            + weights.get("melody", 0) * melody_score
+            + weights.get("neural_quality", 0) * neural_score
+            + weights.get("structural", 0) * structural_score
+            + weights.get("vocal", 0) * vocal_score
+            + weights.get("attribute", 0) * attribute_score
+            + weights.get("preference", 0) * preference_score
+            + weights.get("perceptual", 0) * perceptual_score
+            + weights.get("neural_codec", 0) * neural_codec_score
+            + weights.get("timbral", 0) * timbral_score
+            + weights.get("vocal_lyrics", 0) * vocal_lyrics_score
+            + weights.get("mix_separation", 0) * mix_sep_score
+            + weights.get("learned_mos", 0) * mos_score
+            + weights.get("diversity", 0) * diversity_score
+            + weights.get("speed", 0) * speed_score
         )
 
         final = composite * duration_penalty * artifact_penalty
@@ -224,6 +284,8 @@ class ProductionRewardModel:
             f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
             f"attr={attribute_score:.3f} pref={preference_score:.3f} "
             f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
+            f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
+            f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
             f"speed={speed_score:.3f} div={diversity_score:.3f} "
             f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} → {final:.3f}"
         )
@@ -271,6 +333,7 @@ class ProductionRewardModel:
 
                 genre = getattr(synapse, "genre", "") or ""
                 challenge_id = getattr(synapse, "challenge_id", "") or ""
+                expected_lyrics = getattr(synapse, "lyrics", "") or ""
 
                 clap_score = self._clap.score(audio, sr, synapse.prompt)
                 quality_scores = self._quality.score(audio, sr, genre=genre)
@@ -296,35 +359,67 @@ class ProductionRewardModel:
                 speed_score = self._speed_score(synapse)
                 diversity_score = diversity_scores[i]
 
+                # NEW scorers
+                timbral_scores = self._timbral.score(audio, sr, genre=genre)
+                timbral_score = self._timbral.aggregate(timbral_scores)
+                vocal_lyrics_scores = self._vocal_lyrics.score(
+                    audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+                )
+                vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
+                mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
+                mix_sep_score = self._mix_separation.aggregate(mix_sep_scores)
+                mos_scores = self._learned_mos.score(audio, sr)
+                mos_score = self._learned_mos.aggregate(mos_scores)
+
                 duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
                 artifact_penalty = self._artifact.detect(audio, sr)
+
+                # Soft plagiarism penalty (partial score reduction for near-matches)
+                soft_plag_penalty = self._plagiarism.get_soft_penalty(audio, sr, hotkey)
 
                 # FAD: update miner embedding and get penalty
                 clap_emb = self._clap.last_embedding
                 self._fad.update_miner_embedding(hotkey, clap_emb)
                 fad_penalty = self._fad.get_fad_penalty(hotkey)
 
-                weights = self._perturb_weights(challenge_id)
+                # Multi-scale weight adjustment
+                duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
+                scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
+
+                weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+
+                # Apply multi-scale multipliers
+                for key in weights:
+                    if key in scale_multipliers:
+                        weights[key] *= scale_multipliers[key]
+                total_w = sum(weights.values())
+                if total_w > 0:
+                    weights = {k: v / total_w for k, v in weights.items()}
 
                 composite = (
-                    weights["clap"] * clap_score
-                    + weights["quality"] * quality_score
-                    + weights["musicality"] * musicality_score
-                    + weights["production"] * production_score
-                    + weights["melody"] * melody_score
-                    + weights["neural_quality"] * neural_score
-                    + weights["structural"] * structural_score
-                    + weights["vocal"] * vocal_score
-                    + weights["attribute"] * attribute_score
-                    + weights["preference"] * preference_score
-                    + weights["perceptual"] * perceptual_score
-                    + weights["neural_codec"] * neural_codec_score
-                    + weights["diversity"] * diversity_score
-                    + weights["speed"] * speed_score
+                    weights.get("clap", 0) * clap_score
+                    + weights.get("quality", 0) * quality_score
+                    + weights.get("musicality", 0) * musicality_score
+                    + weights.get("production", 0) * production_score
+                    + weights.get("melody", 0) * melody_score
+                    + weights.get("neural_quality", 0) * neural_score
+                    + weights.get("structural", 0) * structural_score
+                    + weights.get("vocal", 0) * vocal_score
+                    + weights.get("attribute", 0) * attribute_score
+                    + weights.get("preference", 0) * preference_score
+                    + weights.get("perceptual", 0) * perceptual_score
+                    + weights.get("neural_codec", 0) * neural_codec_score
+                    + weights.get("timbral", 0) * timbral_score
+                    + weights.get("vocal_lyrics", 0) * vocal_lyrics_score
+                    + weights.get("mix_separation", 0) * mix_sep_score
+                    + weights.get("learned_mos", 0) * mos_score
+                    + weights.get("diversity", 0) * diversity_score
+                    + weights.get("speed", 0) * speed_score
                 )
 
                 final = float(np.clip(
-                    composite * duration_penalty * artifact_penalty * fad_penalty, 0.0, 1.0
+                    composite * duration_penalty * artifact_penalty * fad_penalty * soft_plag_penalty,
+                    0.0, 1.0,
                 ))
 
                 logger.debug(
@@ -334,9 +429,11 @@ class ProductionRewardModel:
                     f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
                     f"attr={attribute_score:.3f} pref={preference_score:.3f} "
                     f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
+                    f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
+                    f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
                     f"speed={speed_score:.3f} div={diversity_score:.3f} "
                     f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
-                    f"fad_pen={fad_penalty:.3f} → {final:.3f}"
+                    f"fad_pen={fad_penalty:.3f} plag_pen={soft_plag_penalty:.3f} → {final:.3f}"
                 )
 
                 rewards.append(final)
@@ -483,22 +580,27 @@ class ProductionRewardModel:
         return SPEED_MID_SCORE * (1.0 - frac)
 
     @staticmethod
-    def _perturb_weights(challenge_id: str) -> dict[str, float]:
+    def _perturb_weights(challenge_id: str, validator_secret: str = "") -> dict[str, float]:
         """
         Per-round weight perturbation for anti-gaming.
 
-        Deterministic per challenge_id (reproducible for verification),
-        but unpredictable to miners since challenge_id is generated by
-        the validator.  Each weight is perturbed by ±WEIGHT_PERTURBATION
-        and the result is renormalized to sum to 1.0.
+        Deterministic per (challenge_id + validator_secret), reproducible for
+        verification by the same validator but unpredictable to miners.
+        The validator_secret is a private nonce that is NEVER transmitted to
+        miners, preventing them from reconstructing the perturbed weights.
+
+        Each weight is perturbed by ±WEIGHT_PERTURBATION and the result is
+        renormalized to sum to 1.0.
 
         Returns SCORING_WEIGHTS unchanged if perturbation is disabled.
         """
         if WEIGHT_PERTURBATION <= 0.0 or not challenge_id:
             return dict(SCORING_WEIGHTS)
 
-        # Deterministic seed from challenge_id
-        seed = int(hashlib.md5(challenge_id.encode()).hexdigest()[:8], 16)
+        # Deterministic seed from challenge_id + validator secret
+        # The secret is never shared with miners, making weights unpredictable
+        seed_material = f"{challenge_id}:{validator_secret}" if validator_secret else challenge_id
+        seed = int(hashlib.sha256(seed_material.encode()).hexdigest()[:8], 16)
         rng = np.random.RandomState(seed)
 
         perturbed: dict[str, float] = {}

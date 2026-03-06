@@ -10,6 +10,9 @@ Supports two architectures:
 - Dual-embedding (512-dim CLAP + 768-dim MERT = 1280-dim) via ``DualPreferenceHead``
 
 The architecture is auto-detected from the checkpoint.
+
+Training supports Bradley-Terry pairwise loss for learning from A/B comparisons,
+which better matches the annotation format and avoids difficulty of absolute scoring.
 """
 
 from __future__ import annotations
@@ -278,3 +281,94 @@ class PreferenceModel:
         score while the preference model is untrained.
         """
         return 0.5
+
+
+class BradleyTerryLoss(torch.nn.Module):
+    """Bradley-Terry pairwise preference loss for training.
+
+    Given embeddings for preferred (A) and rejected (B) audio,
+    trains the preference head to satisfy P(A > B) = sigmoid(s(A) - s(B)).
+
+    This loss function better matches the A/B annotation format used in
+    TuneForge's crowd annotation system.
+    """
+
+    def forward(
+        self,
+        score_preferred: torch.Tensor,
+        score_rejected: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute Bradley-Terry loss.
+
+        Args:
+            score_preferred: Scalar scores for preferred audio (batch).
+            score_rejected: Scalar scores for rejected audio (batch).
+
+        Returns:
+            Mean negative log-likelihood of correct ranking.
+        """
+        # P(A > B) = sigmoid(s(A) - s(B))
+        diff = score_preferred - score_rejected
+        loss = -torch.nn.functional.logsigmoid(diff)
+        return loss.mean()
+
+
+class PairwisePreferenceTrainer:
+    """Train preference model on pairwise A/B comparisons.
+
+    Uses Bradley-Terry loss instead of pointwise MSE regression.
+    """
+
+    def __init__(
+        self,
+        head: PreferenceHead | DualPreferenceHead,
+        lr: float = 1e-4,
+        weight_decay: float = 1e-5,
+    ) -> None:
+        self._head = head
+        self._loss_fn = BradleyTerryLoss()
+        self._optimizer = torch.optim.AdamW(
+            head.parameters(), lr=lr, weight_decay=weight_decay
+        )
+
+    def train_step(
+        self,
+        preferred_embedding: torch.Tensor,
+        rejected_embedding: torch.Tensor,
+    ) -> float:
+        """Single training step on a batch of pairwise comparisons.
+
+        Args:
+            preferred_embedding: Embeddings for preferred audio (B, D).
+            rejected_embedding: Embeddings for rejected audio (B, D).
+
+        Returns:
+            Loss value.
+        """
+        self._head.train()
+        self._optimizer.zero_grad()
+
+        score_a = self._head(preferred_embedding).squeeze(-1)
+        score_b = self._head(rejected_embedding).squeeze(-1)
+
+        loss = self._loss_fn(score_a, score_b)
+        loss.backward()
+        self._optimizer.step()
+
+        return float(loss.item())
+
+    def validate(
+        self,
+        preferred_embeddings: torch.Tensor,
+        rejected_embeddings: torch.Tensor,
+    ) -> float:
+        """Compute pairwise accuracy on validation set.
+
+        Returns fraction of pairs where preferred > rejected.
+        """
+        self._head.eval()
+        with torch.no_grad():
+            score_a = self._head(preferred_embeddings).squeeze(-1)
+            score_b = self._head(rejected_embeddings).squeeze(-1)
+            correct = (score_a > score_b).float().mean()
+        return float(correct.item())

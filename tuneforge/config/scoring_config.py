@@ -43,20 +43,30 @@ BURN_WEIGHT: float = _env_float("TF_BURN_WEIGHT", 0.0)
 # Artifact detection is applied as a penalty multiplier (not in weights).
 # ---------------------------------------------------------------------------
 SCORING_WEIGHTS: dict[str, float] = {
-    "clap": _env_float("TF_WEIGHT_CLAP", 0.20),
-    "quality": _env_float("TF_WEIGHT_QUALITY", 0.04),
-    "musicality": _env_float("TF_WEIGHT_MUSICALITY", 0.10),
-    "production": _env_float("TF_WEIGHT_PRODUCTION", 0.06),
-    "melody": _env_float("TF_WEIGHT_MELODY", 0.07),
-    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.08),
+    # Prompt adherence (15%)
+    "clap": _env_float("TF_WEIGHT_CLAP", 0.15),
+    # Core music quality (42%)
+    "quality": _env_float("TF_WEIGHT_QUALITY", 0.03),
+    "musicality": _env_float("TF_WEIGHT_MUSICALITY", 0.08),
+    "production": _env_float("TF_WEIGHT_PRODUCTION", 0.05),
+    "melody": _env_float("TF_WEIGHT_MELODY", 0.05),
+    "neural_quality": _env_float("TF_WEIGHT_NEURAL_QUALITY", 0.06),
     "preference": _env_float("TF_WEIGHT_PREFERENCE", 0.06),
-    "structural": _env_float("TF_WEIGHT_STRUCTURAL", 0.07),
-    "vocal": _env_float("TF_WEIGHT_VOCAL", 0.06),
-    "diversity": _env_float("TF_WEIGHT_DIVERSITY", 0.05),
-    "speed": _env_float("TF_WEIGHT_SPEED", 0.05),
-    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.10),
-    "perceptual": _env_float("TF_WEIGHT_PERCEPTUAL", 0.04),
+    "structural": _env_float("TF_WEIGHT_STRUCTURAL", 0.05),
+    "vocal": _env_float("TF_WEIGHT_VOCAL", 0.04),
+    # Verification (8%)
+    "attribute": _env_float("TF_WEIGHT_ATTRIBUTE", 0.08),
+    # Perceptual quality (4%)
+    "perceptual": _env_float("TF_WEIGHT_PERCEPTUAL", 0.02),
     "neural_codec": _env_float("TF_WEIGHT_NEURAL_CODEC", 0.02),
+    # NEW scorers addressing audit gaps (20%)
+    "timbral": _env_float("TF_WEIGHT_TIMBRAL", 0.07),
+    "vocal_lyrics": _env_float("TF_WEIGHT_VOCAL_LYRICS", 0.05),
+    "mix_separation": _env_float("TF_WEIGHT_MIX_SEPARATION", 0.04),
+    "learned_mos": _env_float("TF_WEIGHT_LEARNED_MOS", 0.04),
+    # Other (11%)
+    "diversity": _env_float("TF_WEIGHT_DIVERSITY", 0.08),
+    "speed": _env_float("TF_WEIGHT_SPEED", 0.03),
 }
 
 # ---------------------------------------------------------------------------
@@ -75,13 +85,18 @@ QUALITY_WEIGHTS: dict[str, float] = {
 # ---------------------------------------------------------------------------
 EMA_ALPHA: float = _env_float("TF_EMA_ALPHA", 0.2)
 EMA_WARMUP: int = _env_int("TF_EMA_WARMUP", 9)  # kept for reference; no longer used as a gate
-STEEPEN_BASELINE: float = _env_float("TF_STEEPEN_BASELINE", 0.50)
+STEEPEN_BASELINE: float = _env_float("TF_STEEPEN_BASELINE", 0.45)
 STEEPEN_POWER: float = _env_float("TF_STEEPEN_POWER", 2.0)
 
 # ---------------------------------------------------------------------------
 # Plagiarism / silence thresholds
 # ---------------------------------------------------------------------------
-SELF_PLAGIARISM_THRESHOLD: float = _env_float("TF_SELF_PLAGIARISM_THRESHOLD", 0.80)
+SELF_PLAGIARISM_THRESHOLD: float = _env_float("TF_SELF_PLAGIARISM_THRESHOLD", 0.72)
+# Soft plagiarism zone: similarity between soft and hard threshold gets a
+# partial penalty multiplier (0.3) instead of hard zero.
+SOFT_PLAGIARISM_THRESHOLD: float = _env_float("TF_SOFT_PLAGIARISM_THRESHOLD", 0.65)
+# Cross-miner plagiarism uses a slightly stricter threshold
+CROSS_MINER_PLAGIARISM_THRESHOLD: float = _env_float("TF_CROSS_MINER_PLAGIARISM_THRESHOLD", 0.70)
 SILENCE_THRESHOLD: float = _env_float("TF_SILENCE_THRESHOLD", 0.01)
 
 # ---------------------------------------------------------------------------
@@ -102,22 +117,22 @@ METAGRAPH_SYNC_INTERVAL: int = _env_int("TF_METAGRAPH_SYNC_INTERVAL", 1200)
 # Duration defaults
 # ---------------------------------------------------------------------------
 DEFAULT_DURATION: float = _env_float("TF_DEFAULT_DURATION", 10.0)
-MAX_DURATION: float = _env_float("TF_MAX_DURATION", 60.0)
+MAX_DURATION: float = _env_float("TF_MAX_DURATION", 180.0)
 MIN_DURATION: float = _env_float("TF_MIN_DURATION", 1.0)
 DEFAULT_GUIDANCE_SCALE: float = _env_float("TF_DEFAULT_GUIDANCE_SCALE", 3.0)
 
 # ---------------------------------------------------------------------------
 # Speed scoring curve
 # ---------------------------------------------------------------------------
-SPEED_BEST_SECONDS: float = _env_float("TF_SPEED_BEST_SECONDS", 5.0)
-SPEED_MID_SECONDS: float = _env_float("TF_SPEED_MID_SECONDS", 30.0)
+SPEED_BEST_SECONDS: float = _env_float("TF_SPEED_BEST_SECONDS", 15.0)
+SPEED_MID_SECONDS: float = _env_float("TF_SPEED_MID_SECONDS", 45.0)
 SPEED_MID_SCORE: float = _env_float("TF_SPEED_MID_SCORE", 0.3)
-SPEED_MAX_SECONDS: float = _env_float("TF_SPEED_MAX_SECONDS", 60.0)
+SPEED_MAX_SECONDS: float = _env_float("TF_SPEED_MAX_SECONDS", 90.0)
 
 # ---------------------------------------------------------------------------
 # CLAP model
 # ---------------------------------------------------------------------------
-CLAP_MODEL: str = _env_str("TF_CLAP_MODEL", "laion/clap-htsat-unfused")
+CLAP_MODEL: str = _env_str("TF_CLAP_MODEL", "laion/larger_clap_music")
 CLAP_SAMPLE_RATE: int = _env_int("TF_CLAP_SAMPLE_RATE", 48000)
 # Empirical cosine similarity bounds for CLAP music-text pairs.
 # Raw cosine similarities are remapped from [floor, ceiling] → [0, 1].
@@ -176,7 +191,7 @@ EMA_NEW_MINER_SEED: float = _env_float("TF_EMA_NEW_MINER_SEED", 0.25)
 # FAD (Frechet Audio Distance) scoring
 # ---------------------------------------------------------------------------
 FAD_WINDOW_SIZE: int = _env_int("TF_FAD_WINDOW_SIZE", 50)
-FAD_REFERENCE_STATS_PATH: str = _env_str("TF_FAD_REFERENCE_STATS_PATH", "")
+FAD_REFERENCE_STATS_PATH: str = _env_str("TF_FAD_REFERENCE_STATS_PATH", "./reference_fad_stats.npz")
 FAD_PENALTY_MIDPOINT: float = _env_float("TF_FAD_PENALTY_MIDPOINT", 15.0)
 FAD_PENALTY_STEEPNESS: float = _env_float("TF_FAD_PENALTY_STEEPNESS", 2.0)
 FAD_PENALTY_FLOOR: float = _env_float("TF_FAD_PENALTY_FLOOR", 0.5)
@@ -206,3 +221,11 @@ ACTIVE_LEARNING_TOP_K: int = _env_int("TF_ACTIVE_LEARNING_TOP_K", 3)
 ANNOTATOR_RELIABILITY_EMA: float = _env_float("TF_ANNOTATOR_RELIABILITY_EMA", 0.1)
 ANNOTATOR_RELIABILITY_MIN: float = _env_float("TF_ANNOTATOR_RELIABILITY_MIN", 0.1)
 ANNOTATOR_WEIGHTED_THRESHOLD: float = _env_float("TF_ANNOTATOR_WEIGHTED_THRESHOLD", 0.6)
+
+# ---------------------------------------------------------------------------
+# Validator perturbation secret
+# A private nonce used to seed weight perturbation. MUST NOT be shared with
+# miners. Each validator should set a unique value. If empty, falls back to
+# using only challenge_id (less secure but backwards compatible).
+# ---------------------------------------------------------------------------
+VALIDATOR_PERTURBATION_SECRET: str = _env_str("TF_VALIDATOR_PERTURBATION_SECRET", "")

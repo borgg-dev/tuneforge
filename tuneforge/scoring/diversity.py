@@ -1,13 +1,17 @@
 """
 Diversity scorer for TuneForge.
 
-Measures intra-miner diversity using CLAP audio embeddings.
-Miners who produce varied outputs across rounds score higher than those
-who resubmit near-identical audio in successive rounds.
+Measures both intra-miner diversity (varied outputs across rounds) and
+population-level diversity (preventing collective convergence where all
+miners produce similar-sounding music).
 
 MEDIUM-01 fix: replaced inter-miner cosine distance (which rewarded
 off-topic audio and penalised correct consensus) with intra-miner cosine
 distance against each miner's own submission history.
+
+Audit improvements:
+- History increased from 10 to 50 entries
+- Added population-level diversity bonus
 """
 
 from collections import defaultdict, deque
@@ -19,15 +23,18 @@ from tuneforge.config.scoring_config import CLAP_MODEL
 from tuneforge.scoring.clap_scorer import CLAPScorer
 from tuneforge.base.protocol import MusicGenerationSynapse
 
-# Number of past embeddings to retain per miner
-_HISTORY_MAXLEN: int = 10
+# Number of past embeddings to retain per miner (increased from 10)
+_HISTORY_MAXLEN: int = 50
 
 # Default score for miners with no submission history yet
 _DEFAULT_SCORE: float = 0.5
 
+# Population diversity: bonus weight for being different from other miners
+_POPULATION_DIVERSITY_WEIGHT: float = 0.3
+
 
 class DiversityScorer:
-    """Score intra-miner output diversity via CLAP embeddings."""
+    """Score intra-miner and population-level output diversity via CLAP embeddings."""
 
     def __init__(self) -> None:
         self._clap = CLAPScorer(model_name=CLAP_MODEL)
@@ -42,13 +49,11 @@ class DiversityScorer:
         hotkeys: list[str],
     ) -> list[float]:
         """
-        Score intra-miner diversity for a batch of miner responses.
+        Score diversity for a batch of miner responses.
 
-        Each miner's diversity score is the mean cosine *distance* between
-        their current embedding and their own past embeddings stored in
-        ``_miner_history``.  Miners with no history receive a neutral default
-        score of 0.5.  High scores indicate varied output across rounds;
-        low scores indicate repetitive/recycled submissions.
+        Combines:
+        - Intra-miner diversity (70%): cosine distance from own history
+        - Population diversity (30%): cosine distance from other miners in this batch
 
         Args:
             responses: Synapses with audio_b64 populated.
@@ -63,25 +68,44 @@ class DiversityScorer:
                 f"hotkeys length ({len(hotkeys)})"
             )
 
+        # Extract all embeddings first for population diversity
+        embeddings: list[np.ndarray | None] = []
+        for resp in responses:
+            embeddings.append(self._extract_embedding(resp))
+
         scores: list[float] = []
 
-        for resp, hotkey in zip(responses, hotkeys):
-            emb = self._extract_embedding(resp)
+        for i, (resp, hotkey) in enumerate(zip(responses, hotkeys)):
+            emb = embeddings[i]
 
             if emb is None:
-                # Extraction failed — penalise with a zero score
                 scores.append(0.0)
                 continue
 
+            # --- Intra-miner diversity ---
             past = self._miner_history[hotkey]
-
             if len(past) == 0:
-                # No history yet — return neutral default
-                scores.append(_DEFAULT_SCORE)
+                intra_score = _DEFAULT_SCORE
             else:
-                # Compute mean cosine distance from own past embeddings
-                score = self._mean_cosine_distance(emb, list(past))
-                scores.append(score)
+                intra_score = self._mean_cosine_distance(emb, list(past))
+
+            # --- Population diversity ---
+            # Mean cosine distance from other miners' embeddings in this batch
+            other_embs = [
+                embeddings[j] for j in range(len(embeddings))
+                if j != i and embeddings[j] is not None and hotkeys[j] != hotkey
+            ]
+            if len(other_embs) > 0:
+                pop_score = self._mean_cosine_distance(emb, other_embs)
+            else:
+                pop_score = _DEFAULT_SCORE
+
+            # Combine
+            combined = (
+                (1.0 - _POPULATION_DIVERSITY_WEIGHT) * intra_score
+                + _POPULATION_DIVERSITY_WEIGHT * pop_score
+            )
+            scores.append(float(np.clip(combined, 0.0, 1.0)))
 
         return scores
 
@@ -95,10 +119,6 @@ class DiversityScorer:
 
         Call this *after* ``score_batch`` so that history is not updated
         before scoring (which would inflate self-similarity scores).
-
-        Args:
-            responses: Synapses with audio_b64 populated.
-            hotkeys:   Miner hotkeys aligned with ``responses``.
         """
         if len(responses) != len(hotkeys):
             raise ValueError(
@@ -127,13 +147,6 @@ class DiversityScorer:
         """
         Compute the mean cosine distance between *current* and each vector in
         *past*.  Returns a value in [0, 1] where 1 means maximally different.
-
-        Args:
-            current: The embedding for the current round.
-            past:    List of past embeddings for the same miner.
-
-        Returns:
-            Mean cosine distance clipped to [0, 1].
         """
         cur_norm = current / (np.linalg.norm(current) + 1e-8)
 

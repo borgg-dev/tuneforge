@@ -225,13 +225,14 @@ class MusicalityScorer:
             dominant_chromas = [int(np.argmax(seg)) for seg in segments]
             n_distinct = len(set(dominant_chromas))
 
-            # Variety score: bell curve centred at 5 distinct chromas per 10s
-            # Scale expected count by duration
-            expected = 5.0 * (duration / 10.0)
-            expected = max(expected, 1.0)
-            # Normalised deviation
-            variety_dev = abs(n_distinct - expected) / expected
-            variety_score = float(np.exp(-2.0 * variety_dev ** 2))
+            # Variety score: one-sided minimum floor (not bell curve)
+            # At least 3 distinct chromas per 10s, capped at 12
+            min_expected = max(3.0 * (duration / 10.0), 2.0)
+            min_expected = min(min_expected, 12.0)
+            if n_distinct >= min_expected:
+                variety_score = min(1.0, n_distinct / (min_expected * 1.5))
+            else:
+                variety_score = max(0.0, n_distinct / min_expected)
 
             # Smoothness: mean cosine similarity between consecutive segments
             similarities = []
@@ -250,8 +251,12 @@ class MusicalityScorer:
                 return 0.0
 
             mean_sim = float(np.mean(similarities))
-            # Bell curve centred at 0.6
-            smoothness_score = float(np.exp(-8.0 * (mean_sim - 0.6) ** 2))
+            # One-sided: penalize only random jumps (mean_sim < 0.3)
+            # Above 0.3 is acceptable; perfect smoothness (1.0) is also fine
+            if mean_sim >= 0.3:
+                smoothness_score = min(1.0, 0.6 + 0.4 * mean_sim)
+            else:
+                smoothness_score = max(0.0, mean_sim / 0.3)
 
             score = 0.5 * variety_score + 0.5 * smoothness_score
             return float(np.clip(score, 0.0, 1.0))
@@ -389,9 +394,13 @@ class MusicalityScorer:
 
             # Normalise std by mean to get a relative measure
             relative_std = float(np.std(centroid_arr) / (centroid_mean + 1e-8))
-            # Bell curve centred at genre-specific target (moderate variation)
-            contrast_target = profile.arrangement_contrast_target
-            contrast_score = float(np.exp(-50.0 * (relative_std - contrast_target) ** 2))
+            # One-sided minimum floor: penalize only lack of variation
+            # Minimum acceptable contrast varies by genre
+            contrast_floor = profile.arrangement_contrast_target * 0.3
+            if relative_std >= contrast_floor:
+                contrast_score = min(1.0, 0.5 + relative_std * 2.0)
+            else:
+                contrast_score = max(0.0, relative_std / (contrast_floor + 1e-8))
 
             # Coherence: mean pairwise cosine similarity of MFCC vectors
             similarities = []
@@ -411,8 +420,12 @@ class MusicalityScorer:
                 return 0.0
 
             mean_coherence = float(np.mean(similarities))
-            # Bell curve centred at 0.5 similarity
-            coherence_score = float(np.exp(-8.0 * (mean_coherence - 0.5) ** 2))
+            # One-sided: penalize only total incoherence (< 0.2)
+            # Higher coherence is fine (related sections evolving together)
+            if mean_coherence >= 0.2:
+                coherence_score = min(1.0, 0.4 + mean_coherence)
+            else:
+                coherence_score = max(0.0, mean_coherence / 0.2)
 
             score = 0.5 * contrast_score + 0.5 * coherence_score
             return float(np.clip(score, 0.0, 1.0))

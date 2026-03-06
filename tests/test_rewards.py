@@ -57,17 +57,17 @@ class TestSpeedScoring:
 
     def test_fast_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = self._make_synapse_with_process_time(3.0)
+        syn = self._make_synapse_with_process_time(10.0)
         assert PRM._speed_score(syn) == pytest.approx(1.0)
 
     def test_slow_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = self._make_synapse_with_process_time(65.0)
+        syn = self._make_synapse_with_process_time(95.0)
         assert PRM._speed_score(syn) == pytest.approx(0.0)
 
     def test_mid_generation(self):
         from tuneforge.rewards.reward import ProductionRewardModel as PRM
-        syn = self._make_synapse_with_process_time(30.0)
+        syn = self._make_synapse_with_process_time(45.0)
         score = PRM._speed_score(syn)
         assert 0.2 <= score <= 0.4
 

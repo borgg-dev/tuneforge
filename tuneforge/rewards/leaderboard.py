@@ -99,15 +99,28 @@ class MinerLeaderboard:
 
     def _steepen(self, ema: float) -> float:
         """
-        Apply steepening function.
+        Apply steepening function with soft floor.
 
-        Maps EMA below baseline to 0, then raises the remainder
-        to the given power to amplify high performers.
+        Uses a sigmoid transition around the baseline instead of a hard cliff.
+        This prevents oscillation for miners near the threshold and reduces
+        on-chain weight churn.
+
+        Below (baseline - margin): weight approaches 0
+        At baseline: weight is approximately 0.5 of the power-law value
+        Above baseline: standard power-law steepening
         """
-        if ema <= self._baseline:
+        # Soft sigmoid transition (width = 0.05 around baseline)
+        sigmoid_width = 0.05
+        sigmoid = 1.0 / (1.0 + np.exp(-(ema - self._baseline) / sigmoid_width))
+
+        # Power-law component (normalized above baseline)
+        if ema <= 0.0:
             return 0.0
-        normalised = (ema - self._baseline) / (1.0 - self._baseline)
-        return float(normalised ** self._power)
+        normalised = max(0.0, (ema - self._baseline) / (1.0 - self._baseline))
+        power_component = float(normalised ** self._power)
+
+        # Combine: sigmoid gates the power-law value
+        return float(sigmoid * power_component)
 
     def snapshot(self) -> dict:
         """Return a serialisable snapshot of the leaderboard state.

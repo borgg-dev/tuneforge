@@ -271,8 +271,12 @@ class MelodyCoherenceScorer:
 
             ratio = n_similar / n_pairs
 
-            # Bell curve: moderate repetition (35%) scores highest
-            score = float(np.exp(-8.0 * (ratio - 0.35) ** 2))
+            # One-sided: penalize only total lack of repetition (< 10%)
+            # Some repetition is musical; any amount above minimum is acceptable
+            if ratio >= 0.10:
+                score = min(1.0, 0.5 + ratio)
+            else:
+                score = max(0.0, ratio / 0.10)
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -318,8 +322,12 @@ class MelodyCoherenceScorer:
             max_entropy = np.log2(len(unique)) if len(unique) > 1 else 1.0
             normalised_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
 
-            # Bell curve centred at 0.5
-            entropy_score = float(np.exp(-8.0 * (normalised_entropy - 0.5) ** 2))
+            # One-sided: penalize only very low entropy (single note drone)
+            # Higher entropy (varied pitches) is fine; this is not a penalty for creativity
+            if normalised_entropy >= 0.2:
+                entropy_score = min(1.0, 0.3 + normalised_entropy)
+            else:
+                entropy_score = max(0.0, normalised_entropy / 0.2)
 
             # --- Intervallic consistency ---
             semitones = 12.0 * np.log2(voiced / voiced[0] + 1e-10)
