@@ -38,7 +38,13 @@ class HarmonicQualityScorer:
     # Amplitude below which audio is considered silence
     _SILENCE_THRESHOLD: float = 1e-6
 
-    def score(self, audio: np.ndarray, sr: int, genre: str = "") -> dict[str, float]:
+    def score(
+        self,
+        audio: np.ndarray,
+        sr: int,
+        genre: str = "",
+        vocals_requested: bool = False,
+    ) -> dict[str, float]:
         """
         Compute per-metric harmonic quality scores.
 
@@ -46,6 +52,7 @@ class HarmonicQualityScorer:
             audio: Waveform array (1-D or 2-D).
             sr: Sample rate in Hz.
             genre: Optional genre string for genre-aware scoring.
+            vocals_requested: If True, always evaluate vocals regardless of genre.
 
         Returns:
             Dict with keys matching ``HARMONIC_WEIGHTS``.  All values in [0, 1].
@@ -60,7 +67,8 @@ class HarmonicQualityScorer:
             profile = get_genre_profile(genre) if genre else GenreProfile(family="default")
 
             # --- Genre gate: instrumental genres get neutral scores ---
-            if not profile.vocal_expected:
+            # Overridden when the prompt explicitly requests vocals.
+            if not profile.vocal_expected and not vocals_requested:
                 return {k: 0.5 for k in HARMONIC_WEIGHTS}
 
             # --- Edge-case guards (neutral, not zero) ---
