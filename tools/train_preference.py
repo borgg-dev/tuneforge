@@ -177,8 +177,8 @@ def train(
       - n_train: int
       - n_val: int
     """
-    if len(pairs) < 10:
-        raise ValueError(f"Need at least 10 preference pairs, got {len(pairs)}")
+    if len(pairs) < 50:
+        raise ValueError(f"Need at least 50 preference pairs, got {len(pairs)}")
     if len(pairs) < 50:
         print(f"WARNING: Only {len(pairs)} pairs. Recommend 200+ for reliable training.")
 
