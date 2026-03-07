@@ -116,6 +116,7 @@ def create_validator_api(validator: "TuneForgeValidator") -> FastAPI:
     async def health():
         return {
             "status": "ok",
+            "version": "1.0.0",
             "validator_uid": validator.uid,
             "is_running": validator.is_running,
             "current_round": validator.current_round,

@@ -464,6 +464,81 @@ class ProductionRewardModel:
 
         return rewards
 
+    def score_batch_organic(
+        self,
+        synapses: list[MusicGenerationSynapse],
+        miner_hotkeys: list[str],
+    ) -> list[float]:
+        """Lightweight scoring for organic (user-facing) requests.
+
+        Runs only the 5 most impactful scorers (~38% of total weight)
+        to reduce scoring time from ~85s to ~10-15s on CPU:
+        - CLAP prompt adherence (15%) — does the audio match the prompt?
+        - Production quality (5%) — spectral balance, dynamics, loudness
+        - Musicality (9%) — pitch, harmony, rhythm, arrangement
+        - Harmonic/vocal quality (4%) — vocal presence, clarity
+        - Neural quality / MERT (5%) — learned music representations
+
+        Still applies duration_penalty and artifact_penalty as safety gates.
+        No anti-gaming perturbation, no FAD, no diversity (not needed for organic).
+        """
+        # Organic weights (renormalized to sum to 1.0)
+        ORGANIC_WEIGHTS = {
+            "clap": 0.395,       # 15/38
+            "production": 0.132,  # 5/38
+            "musicality": 0.237,  # 9/38
+            "vocal": 0.105,       # 4/38
+            "neural_quality": 0.131,  # 5/38
+        }
+
+        rewards: list[float] = []
+        for i, synapse in enumerate(synapses):
+            audio, sr, raw_audio = self._decode_audio(synapse)
+
+            if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
+                rewards.append(0.0)
+                continue
+
+            genre = getattr(synapse, "genre", "") or ""
+            vocals_requested = getattr(synapse, "vocals_requested", False)
+
+            clap_score = self._clap.score(audio, sr, synapse.prompt)
+            production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
+            production_score = self._production.aggregate(production_scores)
+            musicality_scores = self._musicality.score(audio, sr, genre=genre)
+            musicality_score = self._musicality.aggregate(musicality_scores)
+            vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
+            vocal_score = self._vocal.aggregate(vocal_scores)
+            neural_scores = self._neural.score(audio, sr)
+            neural_score = self._neural.aggregate(neural_scores)
+
+            duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
+            artifact_penalty = self._artifact.detect(audio, sr)
+
+            composite = (
+                ORGANIC_WEIGHTS["clap"] * clap_score
+                + ORGANIC_WEIGHTS["production"] * production_score
+                + ORGANIC_WEIGHTS["musicality"] * musicality_score
+                + ORGANIC_WEIGHTS["vocal"] * vocal_score
+                + ORGANIC_WEIGHTS["neural_quality"] * neural_score
+            )
+
+            final = float(np.clip(
+                composite * duration_penalty * artifact_penalty,
+                0.0, 1.0,
+            ))
+
+            logger.debug(
+                f"[ORGANIC] Score: clap={clap_score:.3f} prod={production_score:.3f} "
+                f"music={musicality_score:.3f} vocal={vocal_score:.3f} "
+                f"neural={neural_score:.3f} dur_pen={duration_penalty:.3f} "
+                f"art_pen={artifact_penalty:.3f} → {final:.3f}"
+            )
+
+            rewards.append(final)
+
+        return rewards
+
     # ------------------------------------------------------------------
     # Audio decoding
     # ------------------------------------------------------------------

@@ -348,9 +348,12 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                 await loop.run_in_executor(None, self.log_status)
                 self.step += 1
 
-                # Async sleep so the event loop stays free for organic requests
+                # Async sleep with ±30% jitter so miners cannot predict
+                # challenge timing and differentiate from organic requests
                 elapsed = time.time() - self.round_start_time
-                remaining = self.settings.validation_interval - elapsed
+                base_interval = self.settings.validation_interval
+                jitter = base_interval * random.uniform(-0.3, 0.3)
+                remaining = (base_interval + jitter) - elapsed
                 if remaining > 0:
                     logger.info(f"Waiting {remaining:.0f}s until next round…")
                     await self._async_wait(remaining)

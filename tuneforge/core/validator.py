@@ -465,7 +465,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
     # Shorter dendrite timeout for organic — don't let slow miners hold
     # up the customer.  Good miners respond in 5-15s.
-    ORGANIC_TIMEOUT: float = 30.0
+    ORGANIC_TIMEOUT: float = 90.0
 
     async def run_organic_generation(
         self,
@@ -478,18 +478,18 @@ class TuneForgeValidator(BaseValidatorNeuron):
         instruments: list[str] | None = None,
         request_id: str = "",
     ) -> list[dict[str, Any]]:
-        """Fan out an organic request to top-K miners, score, return ranked results.
+        """Fan out an organic request to top-K miners, rank by EMA, return best.
 
-        Design for low customer latency:
+        Design for quality + reasonable latency:
         1. Pick top K miners by EMA (proven quality, fast responders)
-        2. Use a short dendrite timeout (30s vs 120s for challenges)
-        3. Score only the valid responses that arrived in time
-        4. Update leaderboard (organic scores feed the same EMA)
-        5. Return results ranked by composite score
+        2. Fan out via dendrite.forward() — wait for all responses
+        3. Rank results by historical EMA score (no scoring lock needed)
+        4. Return immediately, score in background for leaderboard updates
 
-        Returns a list of dicts sorted by composite_score descending.
+        Returns a list of dicts sorted by EMA score descending.
         """
-        # Build synapse
+        # Build synapse — intentionally omit is_organic so miners
+        # cannot distinguish organic from challenge requests (anti-gaming)
         synapse = MusicGenerationSynapse(
             prompt=prompt,
             genre=genre,
@@ -499,7 +499,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
             key_signature=key_signature,
             instruments=instruments,
             challenge_id=request_id or hashlib.md5(prompt.encode()).hexdigest()[:16],
-            is_organic=True,
         )
 
         # Select top-K miners by EMA (best quality first)
@@ -515,7 +514,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
             request_id,
         )
 
-        # Fan out with shorter timeout — don't wait for slow miners
+        # Fan out to all miners — wait for all responses (or timeout)
         axons = [self.metagraph.axons[uid] for uid in miner_uids]
         try:
             responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
@@ -553,31 +552,20 @@ class TuneForgeValidator(BaseValidatorNeuron):
         if not valid_responses:
             return []
 
-        # Score valid responses (under lock, in thread pool so event loop stays free)
+        # Lightweight scoring — 5 key scorers instead of full 18 for fast organic response
         try:
-            async with self._scoring_lock:
-                loop = asyncio.get_event_loop()
-                rewards = await loop.run_in_executor(
-                    self._scoring_executor,
-                    self._reward_model.score_batch,
-                    valid_responses,
-                    valid_hotkeys,
-                )
+            loop = asyncio.get_event_loop()
+            rewards = await loop.run_in_executor(
+                self._scoring_executor,
+                self._reward_model.score_batch_organic,
+                valid_responses,
+                valid_hotkeys,
+            )
         except Exception as exc:
             logger.error("[ORGANIC] Scoring failed: {}", exc)
             rewards = [0.0] * len(valid_responses)
 
-        # Update leaderboard — organic scores feed the same EMA
-        for uid, reward in zip(valid_uids, rewards):
-            self._leaderboard.update(uid, reward)
-        self.update_scores(valid_uids, rewards)
-
-        logger.info(
-            "[ORGANIC] Leaderboard updated with {} organic scores",
-            len(valid_uids),
-        )
-
-        # Build ranked results
+        # Build results ranked by raw score
         results: list[dict[str, Any]] = []
         for uid, hotkey, resp, score in zip(valid_uids, valid_hotkeys, valid_responses, rewards):
             audio_bytes = resp.deserialize()
@@ -595,7 +583,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 "total_valid": len(valid_responses),
             })
 
-        # Sort by score descending
         results.sort(key=lambda r: r["composite_score"], reverse=True)
 
         for i, r in enumerate(results[:5]):
@@ -604,7 +591,49 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 i + 1, r["miner_uid"], r["composite_score"], r["generation_time_ms"],
             )
 
+        # Schedule background full scoring — updates EMA so organic
+        # performance counts toward weights (anti-gaming: miners can't
+        # safely downgrade organic quality without hurting their EMA)
+        asyncio.get_event_loop().create_task(
+            self._background_full_score(valid_responses, valid_uids, valid_hotkeys, request_id)
+        )
+
         return results
+
+    async def _background_full_score(
+        self,
+        responses: list[MusicGenerationSynapse],
+        uids: list[int],
+        hotkeys: list[str],
+        request_id: str,
+    ) -> None:
+        """Run full 18-scorer pipeline in background and update EMA.
+
+        Called after organic results are already returned to the user.
+        This ensures organic quality affects miner weights without
+        adding latency to the user-facing response.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            rewards = await loop.run_in_executor(
+                self._scoring_executor,
+                self._reward_model.score_batch,
+                responses,
+                hotkeys,
+            )
+
+            # Update leaderboard and scores with full-pipeline results
+            for uid, reward in zip(uids, rewards):
+                self._leaderboard.update(uid, reward)
+            self.update_scores(uids, rewards)
+
+            logger.info(
+                "[ORGANIC] Background full scoring complete for {}: {}",
+                request_id,
+                ", ".join(f"UID {u}={r:.4f}" for u, r in zip(uids, rewards)),
+            )
+        except Exception as exc:
+            logger.error("[ORGANIC] Background full scoring failed for {}: {}", request_id, exc)
 
     def _get_serving_miners(self) -> list[int]:
         """Get UIDs of all serving miners (exclude self)."""
