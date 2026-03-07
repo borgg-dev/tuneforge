@@ -147,6 +147,10 @@ class Settings(BaseSettings):
         default=None,
         description="Path to trained preference model checkpoint (.pt file)",
     )
+    acoustid_api_key: str = Field(
+        default="",
+        description="AcoustID API key for known-song fingerprint lookup (optional)",
+    )
 
     # Weight setting
     weight_setter_step: int = Field(

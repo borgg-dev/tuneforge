@@ -5,7 +5,7 @@ Combines signal sources into a single 0-1 reward per miner response.
 Prompt adherence is the primary user-facing signal; quality prevents
 technical defects from reaching users.
 
-18 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
+18 weighted scorers + 5 penalty multipliers + multi-scale evaluation.
 
 Prompt adherence (24%):
 - CLAP text-audio similarity   (15%)  — kept at 15% to avoid gaming amplification
@@ -44,7 +44,9 @@ Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
 - Artifact penalty              — spectral discontinuities, clipping, loops
 - FAD penalty                   — per-miner Frechet Audio Distance from real music
+- Fingerprint penalty           — Chromaprint dedup + AcoustID known-song detection
 Hard penalties override composite scores (silence, timeout).
+Speed scorer includes minimum generation time check (anti-copy).
 
 Multi-scale evaluation adjusts weights based on audio duration:
 - Short clips (<10s): emphasize production quality
@@ -82,8 +84,12 @@ from tuneforge.config.scoring_config import (
     FAD_PENALTY_STEEPNESS,
     FAD_PENALTY_FLOOR,
     VALIDATOR_PERTURBATION_SECRET,
+    FINGERPRINT_LOCAL_WINDOW,
+    MIN_GENERATION_RATIO,
+    SUSPICIOUSLY_FAST_PENALTY,
 )
 from tuneforge.scoring.artifact_detector import ArtifactDetector
+from tuneforge.scoring.fingerprint_scorer import FingerprintScorer
 from tuneforge.scoring.attribute_verifier import AttributeVerifier
 from tuneforge.scoring.audio_quality import AudioQualityScorer
 from tuneforge.scoring.clap_scorer import CLAPScorer
@@ -140,8 +146,12 @@ class ProductionRewardModel:
         self._mix_separation = MixSeparationScorer()
         self._learned_mos = LearnedMOSScorer()
         self._multi_scale = MultiScaleEvaluator()
+        self._fingerprint = FingerprintScorer(
+            local_window=FINGERPRINT_LOCAL_WINDOW,
+            acoustid_api_key=getattr(config, "acoustid_api_key", "") or "",
+        )
         self._config = config
-        logger.info("ProductionRewardModel initialised (18 scorers + 3 penalties + multi-scale)")
+        logger.info("ProductionRewardModel initialised (18 scorers + 4 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
     # Public API
@@ -230,6 +240,7 @@ class ProductionRewardModel:
         # --- Penalty multipliers ---
         duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
         artifact_penalty = self._artifact.detect(audio, sr)
+        fingerprint_penalty = self._fingerprint.score(audio, sr, miner_hotkey=miner_hotkey)
 
         # FAD: update miner embedding and get penalty
         self._fad.update_miner_embedding(miner_hotkey, clap_emb_for_fad)
@@ -290,7 +301,7 @@ class ProductionRewardModel:
             + phrase_bonus + arc_bonus
         )
 
-        final = composite * duration_penalty * artifact_penalty * fad_penalty
+        final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
 
         logger.debug(
             f"Scores: clap={clap_score:.3f} quality={quality_score:.3f} "
@@ -303,7 +314,7 @@ class ProductionRewardModel:
             f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
             f"speed={speed_score:.3f} div={diversity_score:.3f} "
             f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
-            f"fad_pen={fad_penalty:.3f} → {final:.3f}"
+            f"fad_pen={fad_penalty:.3f} fp_pen={fingerprint_penalty:.3f} → {final:.3f}"
         )
 
         return float(np.clip(final, 0.0, 1.0))
@@ -410,6 +421,10 @@ class ProductionRewardModel:
                     self._perceptual.score(audio, sr)),
                 "duration_penalty": self._duration_penalty(audio, sr, synapse.duration_seconds),
                 "artifact_penalty": self._artifact.detect(audio, sr),
+                "fingerprint_penalty": self._fingerprint.score(
+                    audio, sr,
+                    miner_hotkey=miner_hotkeys[i] if i < len(miner_hotkeys) else "",
+                ),
             }
 
         # Only run CPU phase for synapses that passed Phase 1
@@ -492,7 +507,7 @@ class ProductionRewardModel:
 
             final = float(np.clip(
                 composite * cs["duration_penalty"] * cs["artifact_penalty"]
-                * gs["fad_penalty"],
+                * gs["fad_penalty"] * cs["fingerprint_penalty"],
                 0.0, 1.0,
             ))
 
@@ -507,7 +522,8 @@ class ProductionRewardModel:
                 f"mix_sep={cs['mix_sep']:.3f} mos={cs['mos']:.3f} "
                 f"speed={speed_score:.3f} div={diversity_scores[i]:.3f} "
                 f"dur_pen={cs['duration_penalty']:.3f} art_pen={cs['artifact_penalty']:.3f} "
-                f"fad_pen={gs['fad_penalty']:.3f} → {final:.3f}"
+                f"fad_pen={gs['fad_penalty']:.3f} fp_pen={cs['fingerprint_penalty']:.3f} "
+                f"→ {final:.3f}"
             )
 
             rewards.append(final)
@@ -757,6 +773,15 @@ class ProductionRewardModel:
         # Duration-relative: compute generation-to-duration ratio
         requested_duration = getattr(synapse, "duration_seconds", 10.0) or 10.0
         ratio = gen_seconds / max(requested_duration, 1.0)
+
+        # Suspiciously fast check: real models need at least ~0.3x real-time.
+        # Responding faster than that suggests pre-loaded audio, not generation.
+        if ratio < MIN_GENERATION_RATIO:
+            logger.debug(
+                f"Suspiciously fast response: ratio={ratio:.2f} "
+                f"(min={MIN_GENERATION_RATIO})"
+            )
+            return SUSPICIOUSLY_FAST_PENALTY
 
         # Ratio-based scoring curve:
         # ratio <= 1.0 (real-time or faster): 1.0

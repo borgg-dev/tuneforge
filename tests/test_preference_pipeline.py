@@ -185,14 +185,14 @@ class TestTrainingLoop:
                 os.unlink(out_path)
 
     def test_refuses_tiny_dataset(self):
-        """<10 pairs should raise ValueError."""
+        """<50 pairs should raise ValueError."""
         from tools.train_preference import train
 
         pairs = self._make_synthetic_pairs(5)
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
             out_path = f.name
         try:
-            with pytest.raises(ValueError, match="at least 10"):
+            with pytest.raises(ValueError, match="at least 50"):
                 train(
                     pairs=pairs,
                     lr=1e-3,
