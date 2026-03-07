@@ -655,30 +655,36 @@ class TuneForgeValidator(BaseValidatorNeuron):
     def _get_top_miners_by_ema(self, k: int) -> list[int]:
         """Get the top-K serving miners ranked by EMA score.
 
-        Miners with proven quality (high EMA from challenge rounds)
-        are most likely to produce good organic results quickly.
-        Falls back to all serving miners if leaderboard is empty.
+        Only considers miners with EMA > 0 (have produced valid audio
+        in at least one challenge round). This avoids querying miners
+        that have never responded successfully.
+        Falls back to all serving miners if no miners have EMA > 0.
         """
         serving = self._get_serving_miners()
         if not serving:
             return []
 
-        # Rank by EMA descending, then take top K
+        # Only consider miners that have proven they can generate audio
         scored = [
             (uid, self._leaderboard.get_ema(uid))
             for uid in serving
+            if self._leaderboard.get_ema(uid) > 0.0
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
 
+        # Fall back to all serving miners if none have EMA > 0
+        if not scored:
+            logger.warning("[ORGANIC] No miners with EMA > 0 — falling back to all {} serving", len(serving))
+            return serving[:k]
+
         top_k = [uid for uid, _ in scored[:k]]
 
-        if top_k:
-            best_ema = self._leaderboard.get_ema(top_k[0])
-            worst_ema = self._leaderboard.get_ema(top_k[-1])
-            logger.debug(
-                "[ORGANIC] Top-{} miners: EMA range [{:.4f}, {:.4f}]",
-                len(top_k), worst_ema, best_ema,
-            )
+        best_ema = self._leaderboard.get_ema(top_k[0])
+        worst_ema = self._leaderboard.get_ema(top_k[-1])
+        logger.debug(
+            "[ORGANIC] Top-{} miners (of {} proven): EMA range [{:.4f}, {:.4f}]",
+            len(top_k), len(scored), worst_ema, best_ema,
+        )
 
         return top_k
 

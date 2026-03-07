@@ -62,6 +62,7 @@ Anti-gaming:
 import hashlib
 import io
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 from loguru import logger
@@ -315,6 +316,15 @@ class ProductionRewardModel:
         """
         Score a full batch of responses, including diversity.
 
+        Two-phase parallel scoring to maximize throughput while
+        respecting thread-safety constraints:
+        - Phase 1 (sequential): GPU scorers (CLAP, MERT, EnCodec, preference)
+          and shared-state scorers (attribute, FAD). These use GPU models
+          that are not thread-safe and share mutable state.
+        - Phase 2 (parallel): CPU-bound scorers (musicality, production,
+          melody, structural, vocal, timbral, mix_separation, learned_mos,
+          quality, perceptual, artifact). Pure numpy/librosa, stateless.
+
         Args:
             synapses: All response synapses in this round.
             miner_hotkeys: Corresponding miner hotkeys.
@@ -325,68 +335,111 @@ class ProductionRewardModel:
         # Pre-compute diversity scores for the whole batch (intra-miner)
         diversity_scores = self._diversity.score_batch(synapses, miner_hotkeys)
 
-        rewards: list[float] = []
-        for i, synapse in enumerate(synapses):
+        # Decode all audio
+        decoded = []
+        for synapse in synapses:
             audio, sr, raw_audio = self._decode_audio(synapse)
+            decoded.append((audio, sr, raw_audio))
+
+        # Phase 1: GPU + shared-state scorers (sequential — not thread-safe)
+        gpu_scores: list[dict | None] = []
+        for i, synapse in enumerate(synapses):
+            audio, sr, raw_audio = decoded[i]
             hotkey = miner_hotkeys[i] if i < len(miner_hotkeys) else ""
 
             if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
-                rewards.append(0.0)
+                gpu_scores.append(None)
                 continue
-
-            genre = getattr(synapse, "genre", "") or ""
-            challenge_id = getattr(synapse, "challenge_id", "") or ""
-            expected_lyrics = getattr(synapse, "lyrics", "") or ""
-            vocals_requested = getattr(synapse, "vocals_requested", False)
 
             clap_score = self._clap.score(audio, sr, synapse.prompt)
             # Capture CLAP embedding immediately — attribute verifier
             # also calls CLAP and overwrites last_embedding
             clap_emb_for_fad = self._clap.last_embedding
-            quality_scores = self._quality.score(audio, sr, genre=genre)
-            quality_score = self._quality.aggregate(quality_scores)
-            musicality_scores = self._musicality.score(audio, sr, genre=genre)
-            musicality_score = self._musicality.aggregate(musicality_scores)
-            production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
-            production_score = self._production.aggregate(production_scores)
-            melody_scores = self._melody.score(audio, sr)
-            melody_score = self._melody.aggregate(melody_scores)
-            neural_scores = self._neural.score(audio, sr)
-            neural_score = self._neural.aggregate(neural_scores)
-            structural_scores = self._structural.score(audio, sr, genre=genre)
-            structural_score = self._structural.aggregate(structural_scores)
-            vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
-            vocal_score = self._vocal.aggregate(vocal_scores)
+            neural_score = self._neural.aggregate(self._neural.score(audio, sr))
+            neural_codec_score = self._neural_codec.aggregate(
+                self._neural_codec.score(audio, sr))
             attribute_score = self._attribute.verify_all(audio, sr, synapse)
             preference_score = self._preference.score(audio, sr)
-            perceptual_scores = self._perceptual.score(audio, sr)
-            perceptual_score = self._perceptual.aggregate(perceptual_scores)
-            neural_codec_scores = self._neural_codec.score(audio, sr)
-            neural_codec_score = self._neural_codec.aggregate(neural_codec_scores)
-            speed_score = self._speed_score(synapse)
-            diversity_score = diversity_scores[i]
-
-            # Naturalness & mix scorers
-            timbral_scores = self._timbral.score(audio, sr, genre=genre)
-            timbral_score = self._timbral.aggregate(timbral_scores)
-            vocal_lyrics_scores = self._vocal_lyrics.score(
-                audio, sr, genre=genre, expected_lyrics=expected_lyrics,
-                vocals_requested=vocals_requested,
-            )
-            vocal_lyrics_score = self._vocal_lyrics.aggregate(vocal_lyrics_scores)
-            mix_sep_scores = self._mix_separation.score(audio, sr, genre=genre)
-            mix_sep_score = self._mix_separation.aggregate(mix_sep_scores)
-            mos_scores = self._learned_mos.score(audio, sr)
-            mos_score = self._learned_mos.aggregate(mos_scores)
-
-            duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
-            artifact_penalty = self._artifact.detect(audio, sr)
 
             # FAD: update miner embedding and get penalty
             self._fad.update_miner_embedding(hotkey, clap_emb_for_fad)
             fad_penalty = self._fad.get_fad_penalty(hotkey)
 
+            gpu_scores.append({
+                "clap": clap_score,
+                "neural": neural_score,
+                "neural_codec": neural_codec_score,
+                "attribute": attribute_score,
+                "preference": preference_score,
+                "fad_penalty": fad_penalty,
+            })
+
+        # Phase 2: CPU-bound scorers (parallel — stateless, thread-safe)
+        def _score_cpu(i: int) -> dict:
+            """Run CPU-bound scorers for one synapse."""
+            synapse = synapses[i]
+            audio, sr, raw_audio = decoded[i]
+            genre = getattr(synapse, "genre", "") or ""
+            expected_lyrics = getattr(synapse, "lyrics", "") or ""
+            vocals_requested = getattr(synapse, "vocals_requested", False)
+
+            return {
+                "quality": self._quality.aggregate(
+                    self._quality.score(audio, sr, genre=genre)),
+                "musicality": self._musicality.aggregate(
+                    self._musicality.score(audio, sr, genre=genre)),
+                "production": self._production.aggregate(
+                    self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)),
+                "melody": self._melody.aggregate(
+                    self._melody.score(audio, sr)),
+                "structural": self._structural.aggregate(
+                    self._structural.score(audio, sr, genre=genre)),
+                "vocal": self._vocal.aggregate(
+                    self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)),
+                "timbral": self._timbral.aggregate(
+                    self._timbral.score(audio, sr, genre=genre)),
+                "vocal_lyrics": self._vocal_lyrics.aggregate(
+                    self._vocal_lyrics.score(
+                        audio, sr, genre=genre, expected_lyrics=expected_lyrics,
+                        vocals_requested=vocals_requested)),
+                "mix_sep": self._mix_separation.aggregate(
+                    self._mix_separation.score(audio, sr, genre=genre)),
+                "mos": self._learned_mos.aggregate(
+                    self._learned_mos.score(audio, sr)),
+                "perceptual": self._perceptual.aggregate(
+                    self._perceptual.score(audio, sr)),
+                "duration_penalty": self._duration_penalty(audio, sr, synapse.duration_seconds),
+                "artifact_penalty": self._artifact.detect(audio, sr),
+            }
+
+        # Only run CPU phase for synapses that passed Phase 1
+        valid_indices = [i for i, gs in enumerate(gpu_scores) if gs is not None]
+        cpu_scores: dict[int, dict] = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(valid_indices))) as pool:
+            futures = {pool.submit(_score_cpu, i): i for i in valid_indices}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    cpu_scores[idx] = future.result()
+                except Exception as exc:
+                    logger.error("CPU scoring failed for index {}: {}", idx, exc)
+                    cpu_scores[idx] = None
+
+        # Combine phases and compute final scores
+        rewards: list[float] = []
+        for i, synapse in enumerate(synapses):
+            if gpu_scores[i] is None or cpu_scores.get(i) is None:
+                rewards.append(0.0)
+                continue
+
+            gs = gpu_scores[i]
+            cs = cpu_scores[i]
+            challenge_id = getattr(synapse, "challenge_id", "") or ""
+            vocals_requested = getattr(synapse, "vocals_requested", False)
+            speed_score = self._speed_score(synapse)
+
             # Multi-scale weight adjustment
+            audio, sr, _ = decoded[i]
             duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
             scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
@@ -416,44 +469,45 @@ class ProductionRewardModel:
                 weights = {k: v / total_w for k, v in weights.items()}
 
             composite = (
-                weights.get("clap", 0) * clap_score
-                + weights.get("quality", 0) * quality_score
-                + weights.get("musicality", 0) * musicality_score
-                + weights.get("production", 0) * production_score
-                + weights.get("melody", 0) * melody_score
-                + weights.get("neural_quality", 0) * neural_score
-                + weights.get("structural", 0) * structural_score
-                + weights.get("vocal", 0) * vocal_score
-                + weights.get("attribute", 0) * attribute_score
-                + weights.get("preference", 0) * preference_score
-                + weights.get("perceptual", 0) * perceptual_score
-                + weights.get("neural_codec", 0) * neural_codec_score
-                + weights.get("timbral", 0) * timbral_score
-                + weights.get("vocal_lyrics", 0) * vocal_lyrics_score
-                + weights.get("mix_separation", 0) * mix_sep_score
-                + weights.get("learned_mos", 0) * mos_score
-                + weights.get("diversity", 0) * diversity_score
+                weights.get("clap", 0) * gs["clap"]
+                + weights.get("quality", 0) * cs["quality"]
+                + weights.get("musicality", 0) * cs["musicality"]
+                + weights.get("production", 0) * cs["production"]
+                + weights.get("melody", 0) * cs["melody"]
+                + weights.get("neural_quality", 0) * gs["neural"]
+                + weights.get("structural", 0) * cs["structural"]
+                + weights.get("vocal", 0) * cs["vocal"]
+                + weights.get("attribute", 0) * gs["attribute"]
+                + weights.get("preference", 0) * gs["preference"]
+                + weights.get("perceptual", 0) * cs["perceptual"]
+                + weights.get("neural_codec", 0) * gs["neural_codec"]
+                + weights.get("timbral", 0) * cs["timbral"]
+                + weights.get("vocal_lyrics", 0) * cs["vocal_lyrics"]
+                + weights.get("mix_separation", 0) * cs["mix_sep"]
+                + weights.get("learned_mos", 0) * cs["mos"]
+                + weights.get("diversity", 0) * diversity_scores[i]
                 + weights.get("speed", 0) * speed_score
                 + phrase_bonus + arc_bonus
             )
 
             final = float(np.clip(
-                composite * duration_penalty * artifact_penalty * fad_penalty,
+                composite * cs["duration_penalty"] * cs["artifact_penalty"]
+                * gs["fad_penalty"],
                 0.0, 1.0,
             ))
 
             logger.debug(
-                f"UID scoring: clap={clap_score:.3f} quality={quality_score:.3f} "
-                f"musicality={musicality_score:.3f} production={production_score:.3f} "
-                f"melody={melody_score:.3f} neural={neural_score:.3f} "
-                f"struct={structural_score:.3f} vocal={vocal_score:.3f} "
-                f"attr={attribute_score:.3f} pref={preference_score:.3f} "
-                f"perceptual={perceptual_score:.3f} codec={neural_codec_score:.3f} "
-                f"timbral={timbral_score:.3f} vocal_lyrics={vocal_lyrics_score:.3f} "
-                f"mix_sep={mix_sep_score:.3f} mos={mos_score:.3f} "
-                f"speed={speed_score:.3f} div={diversity_score:.3f} "
-                f"dur_pen={duration_penalty:.3f} art_pen={artifact_penalty:.3f} "
-                f"fad_pen={fad_penalty:.3f} → {final:.3f}"
+                f"UID scoring: clap={gs['clap']:.3f} quality={cs['quality']:.3f} "
+                f"musicality={cs['musicality']:.3f} production={cs['production']:.3f} "
+                f"melody={cs['melody']:.3f} neural={gs['neural']:.3f} "
+                f"struct={cs['structural']:.3f} vocal={cs['vocal']:.3f} "
+                f"attr={gs['attribute']:.3f} pref={gs['preference']:.3f} "
+                f"perceptual={cs['perceptual']:.3f} codec={gs['neural_codec']:.3f} "
+                f"timbral={cs['timbral']:.3f} vocal_lyrics={cs['vocal_lyrics']:.3f} "
+                f"mix_sep={cs['mix_sep']:.3f} mos={cs['mos']:.3f} "
+                f"speed={speed_score:.3f} div={diversity_scores[i]:.3f} "
+                f"dur_pen={cs['duration_penalty']:.3f} art_pen={cs['artifact_penalty']:.3f} "
+                f"fad_pen={gs['fad_penalty']:.3f} → {final:.3f}"
             )
 
             rewards.append(final)
@@ -471,13 +525,16 @@ class ProductionRewardModel:
     ) -> list[float]:
         """Lightweight scoring for organic (user-facing) requests.
 
-        Runs only the 5 most impactful scorers (~38% of total weight)
-        to reduce scoring time from ~85s to ~10-15s on CPU:
+        Runs only the 5 most impactful scorers (~38% of total weight):
         - CLAP prompt adherence (15%) — does the audio match the prompt?
         - Production quality (5%) — spectral balance, dynamics, loudness
         - Musicality (9%) — pitch, harmony, rhythm, arrangement
         - Harmonic/vocal quality (4%) — vocal presence, clarity
         - Neural quality / MERT (5%) — learned music representations
+
+        Two-phase scoring like score_batch:
+        - Phase 1 (sequential): GPU scorers (CLAP, MERT) — not thread-safe
+        - Phase 2 (parallel): CPU scorers (production, musicality, vocal)
 
         Still applies duration_penalty and artifact_penalty as safety gates.
         No anti-gaming perturbation, no FAD, no diversity (not needed for organic).
@@ -491,48 +548,84 @@ class ProductionRewardModel:
             "neural_quality": 0.131,  # 5/38
         }
 
-        rewards: list[float] = []
-        for i, synapse in enumerate(synapses):
+        # Decode all audio
+        decoded = []
+        for synapse in synapses:
             audio, sr, raw_audio = self._decode_audio(synapse)
+            decoded.append((audio, sr, raw_audio))
+
+        # Phase 1: GPU scorers (sequential — not thread-safe)
+        gpu_scores: list[dict | None] = []
+        for i, synapse in enumerate(synapses):
+            audio, sr, raw_audio = decoded[i]
 
             if audio is None or self._is_silent(audio) or self._is_timeout(synapse):
-                rewards.append(0.0)
+                gpu_scores.append(None)
                 continue
 
+            clap_score = self._clap.score(audio, sr, synapse.prompt)
+            neural_score = self._neural.aggregate(self._neural.score(audio, sr))
+
+            gpu_scores.append({"clap": clap_score, "neural": neural_score})
+
+        # Phase 2: CPU scorers (parallel — stateless, thread-safe)
+        def _score_cpu(i: int) -> dict:
+            synapse = synapses[i]
+            audio, sr, raw_audio = decoded[i]
             genre = getattr(synapse, "genre", "") or ""
             vocals_requested = getattr(synapse, "vocals_requested", False)
 
-            clap_score = self._clap.score(audio, sr, synapse.prompt)
-            production_scores = self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)
-            production_score = self._production.aggregate(production_scores)
-            musicality_scores = self._musicality.score(audio, sr, genre=genre)
-            musicality_score = self._musicality.aggregate(musicality_scores)
-            vocal_scores = self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)
-            vocal_score = self._vocal.aggregate(vocal_scores)
-            neural_scores = self._neural.score(audio, sr)
-            neural_score = self._neural.aggregate(neural_scores)
+            return {
+                "production": self._production.aggregate(
+                    self._production.score(audio, sr, genre=genre, raw_audio=raw_audio)),
+                "musicality": self._musicality.aggregate(
+                    self._musicality.score(audio, sr, genre=genre)),
+                "vocal": self._vocal.aggregate(
+                    self._vocal.score(audio, sr, genre=genre, vocals_requested=vocals_requested)),
+                "duration_penalty": self._duration_penalty(audio, sr, synapse.duration_seconds),
+                "artifact_penalty": self._artifact.detect(audio, sr),
+            }
 
-            duration_penalty = self._duration_penalty(audio, sr, synapse.duration_seconds)
-            artifact_penalty = self._artifact.detect(audio, sr)
+        valid_indices = [i for i, gs in enumerate(gpu_scores) if gs is not None]
+        cpu_scores: dict[int, dict] = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(valid_indices))) as pool:
+            futures = {pool.submit(_score_cpu, i): i for i in valid_indices}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    cpu_scores[idx] = future.result()
+                except Exception as exc:
+                    logger.error("[ORGANIC] CPU scoring failed for index {}: {}", idx, exc)
+                    cpu_scores[idx] = None
+
+        # Combine and compute final scores
+        rewards: list[float] = []
+        for i in range(len(synapses)):
+            if gpu_scores[i] is None or cpu_scores.get(i) is None:
+                rewards.append(0.0)
+                continue
+
+            gs = gpu_scores[i]
+            cs = cpu_scores[i]
 
             composite = (
-                ORGANIC_WEIGHTS["clap"] * clap_score
-                + ORGANIC_WEIGHTS["production"] * production_score
-                + ORGANIC_WEIGHTS["musicality"] * musicality_score
-                + ORGANIC_WEIGHTS["vocal"] * vocal_score
-                + ORGANIC_WEIGHTS["neural_quality"] * neural_score
+                ORGANIC_WEIGHTS["clap"] * gs["clap"]
+                + ORGANIC_WEIGHTS["production"] * cs["production"]
+                + ORGANIC_WEIGHTS["musicality"] * cs["musicality"]
+                + ORGANIC_WEIGHTS["vocal"] * cs["vocal"]
+                + ORGANIC_WEIGHTS["neural_quality"] * gs["neural"]
             )
 
             final = float(np.clip(
-                composite * duration_penalty * artifact_penalty,
+                composite * cs["duration_penalty"] * cs["artifact_penalty"],
                 0.0, 1.0,
             ))
 
             logger.debug(
-                f"[ORGANIC] Score: clap={clap_score:.3f} prod={production_score:.3f} "
-                f"music={musicality_score:.3f} vocal={vocal_score:.3f} "
-                f"neural={neural_score:.3f} dur_pen={duration_penalty:.3f} "
-                f"art_pen={artifact_penalty:.3f} → {final:.3f}"
+                f"[ORGANIC] Score: clap={gs['clap']:.3f} prod={cs['production']:.3f} "
+                f"music={cs['musicality']:.3f} vocal={cs['vocal']:.3f} "
+                f"neural={gs['neural']:.3f} dur_pen={cs['duration_penalty']:.3f} "
+                f"art_pen={cs['artifact_penalty']:.3f} → {final:.3f}"
             )
 
             rewards.append(final)
