@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     client = httpx.Client(
         base_url=args.api_url.rstrip("/"),
         headers={"Authorization": f"Bearer {args.token}"},
-        timeout=httpx.Timeout(120.0, connect=10.0),
+        timeout=httpx.Timeout(300.0, connect=30.0),
     )
 
     # 1. Export annotations
