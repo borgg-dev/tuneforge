@@ -594,8 +594,16 @@ class TuneForgeValidator(BaseValidatorNeuron):
         # Schedule background full scoring — updates EMA so organic
         # performance counts toward weights (anti-gaming: miners can't
         # safely downgrade organic quality without hurting their EMA)
+        # Also submits organic results as annotation rounds for preference training
+        organic_meta = {
+            "prompt": prompt,
+            "genre": genre,
+            "mood": mood,
+            "tempo_bpm": tempo_bpm,
+            "duration_seconds": duration_seconds,
+        }
         asyncio.get_event_loop().create_task(
-            self._background_full_score(valid_responses, valid_uids, valid_hotkeys, request_id)
+            self._background_full_score(valid_responses, valid_uids, valid_hotkeys, request_id, organic_meta)
         )
 
         return results
@@ -606,12 +614,16 @@ class TuneForgeValidator(BaseValidatorNeuron):
         uids: list[int],
         hotkeys: list[str],
         request_id: str,
+        organic_meta: dict[str, Any] | None = None,
     ) -> None:
         """Run full 18-scorer pipeline in background and update EMA.
 
         Called after organic results are already returned to the user.
         This ensures organic quality affects miner weights without
         adding latency to the user-facing response.
+
+        Also submits organic results as a validation round to the API
+        for A/B annotation and preference model training.
         """
         try:
             loop = asyncio.get_event_loop()
@@ -632,6 +644,43 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 request_id,
                 ", ".join(f"UID {u}={r:.4f}" for u, r in zip(uids, rewards)),
             )
+
+            # Submit organic results as a validation round for annotation/preference training
+            if self._api_client is not None and organic_meta and len(responses) >= 2:
+                try:
+                    validator_hotkey = ""
+                    try:
+                        validator_hotkey = self.wallet.hotkey.ss58_address
+                    except Exception:
+                        pass
+                    payload = {
+                        "challenge_id": f"organic-{request_id}",
+                        "prompt": organic_meta["prompt"],
+                        "genre": organic_meta.get("genre", ""),
+                        "mood": organic_meta.get("mood", ""),
+                        "tempo_bpm": organic_meta.get("tempo_bpm", 120),
+                        "duration_seconds": organic_meta.get("duration_seconds", 30),
+                        "validator_hotkey": validator_hotkey,
+                        "responses": [
+                            {
+                                "miner_uid": uid,
+                                "miner_hotkey": hotkey,
+                                "audio_b64": resp.audio_b64,
+                                "generation_time_ms": resp.generation_time_ms,
+                            }
+                            for uid, hotkey, resp in zip(uids, hotkeys, responses)
+                        ],
+                    }
+                    api_resp = await self._api_client.post("/api/v1/validator/rounds", json=payload)
+                    api_resp.raise_for_status()
+                    result = api_resp.json()
+                    logger.info(
+                        "[ORGANIC] Submitted organic round {} to API ({} audio entries)",
+                        result["round_id"], len(responses),
+                    )
+                except Exception as exc:
+                    logger.error("[ORGANIC] Failed to submit organic round to API: {}", exc)
+
         except Exception as exc:
             logger.error("[ORGANIC] Background full scoring failed for {}: {}", request_id, exc)
 
