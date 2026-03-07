@@ -84,7 +84,6 @@ from tuneforge.config.scoring_config import (
     FAD_PENALTY_STEEPNESS,
     FAD_PENALTY_FLOOR,
     VALIDATOR_PERTURBATION_SECRET,
-    FINGERPRINT_LOCAL_WINDOW,
     MIN_GENERATION_RATIO,
     SUSPICIOUSLY_FAST_PENALTY,
 )
@@ -147,7 +146,6 @@ class ProductionRewardModel:
         self._learned_mos = LearnedMOSScorer()
         self._multi_scale = MultiScaleEvaluator()
         self._fingerprint = FingerprintScorer(
-            local_window=FINGERPRINT_LOCAL_WINDOW,
             acoustid_api_key=getattr(config, "acoustid_api_key", "") or "",
         )
         self._config = config

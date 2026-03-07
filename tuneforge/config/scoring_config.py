@@ -188,8 +188,6 @@ FAD_PENALTY_FLOOR: float = 0.5
 # ---------------------------------------------------------------------------
 # Fingerprint anti-plagiarism
 # ---------------------------------------------------------------------------
-FINGERPRINT_LOCAL_WINDOW: int = 500  # Rolling window of recent submissions
-FINGERPRINT_LOCAL_DEDUP_THRESHOLD: float = 0.92  # Similarity for local dedup
 FINGERPRINT_ACOUSTID_THRESHOLD: float = 0.80  # AcoustID match score threshold
 
 # ---------------------------------------------------------------------------
