@@ -43,9 +43,12 @@ class TuneForgeMiner(BaseMinerNeuron):
         settings = settings or get_settings()
         super().__init__(settings=settings)
 
-        # Parse model size from model_name (e.g. "facebook/musicgen-medium" → "medium")
+        # Parse model backend from model_name
         model_name = self.settings.model_name
-        if "musicgen" in model_name:
+        if "ace-step" in model_name.lower() or "ace_step" in model_name.lower() or "acestep" in model_name.lower():
+            model_size = "medium"
+            backend = "ace_step"
+        elif "musicgen" in model_name:
             parts = model_name.split("-")
             model_size = parts[-1] if parts else "medium"
             backend = "musicgen"
@@ -54,7 +57,7 @@ class TuneForgeMiner(BaseMinerNeuron):
             backend = "stable_audio"
         else:
             model_size = "medium"
-            backend = "musicgen"
+            backend = "ace_step"  # Default to ACE-Step
 
         self._model_manager = ModelManager(
             default_backend=backend,

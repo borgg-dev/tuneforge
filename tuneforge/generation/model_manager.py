@@ -20,7 +20,7 @@ class ModelManager:
     at runtime. Only one backend is loaded at a time to conserve GPU memory.
     """
 
-    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "stable_audio")
+    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "stable_audio", "ace_step")
 
     def __init__(
         self,
@@ -100,6 +100,10 @@ class ModelManager:
             from tuneforge.generation.stable_audio_backend import StableAudioBackend
 
             backend = StableAudioBackend(device=self._device)
+        elif name == "ace_step":
+            from tuneforge.generation.ace_step_backend import AceStepBackend
+
+            backend = AceStepBackend(device=self._device)
         else:
             raise ValueError(f"Unknown backend: {name}")
 
