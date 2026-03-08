@@ -57,7 +57,7 @@ class TuneForgeMiner(BaseMinerNeuron):
             backend = "stable_audio"
         else:
             model_size = "medium"
-            backend = "ace_step"  # Default to ACE-Step
+            backend = "musicgen"  # Default to MusicGen
 
         self._model_manager = ModelManager(
             default_backend=backend,

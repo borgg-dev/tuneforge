@@ -143,7 +143,8 @@ def get_raw_fingerprint(audio: np.ndarray, sr: int) -> list[int] | None:
 
 def fingerprint_hash(fp: list[int]) -> str:
     """Generate a compact hash of a fingerprint for cache lookups."""
-    raw = struct.pack(f">{len(fp)}I", *fp[:64])  # Use first 64 components
+    components = fp[:64]
+    raw = struct.pack(f">{len(components)}I", *components)  # Use first 64 components
     return hashlib.sha256(raw).hexdigest()[:16]
 
 

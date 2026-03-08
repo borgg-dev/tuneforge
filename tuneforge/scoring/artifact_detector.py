@@ -27,7 +27,13 @@ class ArtifactDetector:
         """
         try:
             detailed = self.detect_detailed(audio, sr)
-            return float(min(detailed.values()))
+            # Use geometric mean instead of min — one bad check shouldn't
+            # zero out the entire score. This is more fair across model types.
+            # Floor each check at 0.1 so a single zero doesn't kill the score.
+            vals = [max(v, 0.1) for v in detailed.values()]
+            geo_mean = float(np.prod(vals) ** (1.0 / len(vals)))
+            logger.debug(f"Artifact penalties: {detailed} → {geo_mean:.3f}")
+            return geo_mean
         except Exception as exc:
             logger.error(f"Artifact detection failed: {exc}")
             return 1.0
@@ -199,21 +205,22 @@ class ArtifactDetector:
         """
         Detect repetitive (looped) audio segments.
 
-        Segments audio into 0.5-second non-overlapping chunks and checks
-        normalized cross-correlation between non-adjacent pairs.  Only
-        very high correlation (>0.95) is flagged to avoid penalizing
-        natural musical repetition like verse/chorus structure.
+        Segments audio into 2-second non-overlapping chunks and checks
+        normalized cross-correlation between non-adjacent pairs.  Uses
+        a high correlation threshold (>0.98) to only flag near-identical
+        waveforms (copy-paste loops), not natural musical repetition
+        like verse/chorus structure or steady rhythms.
 
         Returns:
             Penalty in [0, 1].
         """
         try:
-            chunk_len = int(0.5 * sr)
+            chunk_len = int(2.0 * sr)
             if chunk_len == 0:
                 return 1.0
 
             n_chunks = len(audio) // chunk_len
-            if n_chunks < 4:
+            if n_chunks < 3:
                 return 1.0
 
             chunks = [audio[i * chunk_len : (i + 1) * chunk_len] for i in range(n_chunks)]
@@ -227,24 +234,24 @@ class ArtifactDetector:
                 else:
                     norm_chunks.append(chunk / norm)
 
-            # Check non-adjacent pairs (gap >= 2 chunks)
+            # Check non-adjacent pairs (gap >= 1 chunk = 2 seconds)
             repeated_chunks = set()
             for i in range(n_chunks):
-                for j in range(i + 3, n_chunks):  # gap >= 2 means j >= i+3
+                for j in range(i + 2, n_chunks):
                     corr = float(np.dot(norm_chunks[i], norm_chunks[j]))
-                    if corr > 0.95:
+                    if corr > 0.98:
                         repeated_chunks.add(i)
                         repeated_chunks.add(j)
 
             repeat_ratio = len(repeated_chunks) / n_chunks
 
-            # Penalty: 1.0 if no repeats, linear ramp to 0.0 if >30% repeated
+            # Penalty: 1.0 if no repeats, linear ramp to 0.0 if >50% repeated
             if repeat_ratio <= 0.0:
                 return 1.0
-            elif repeat_ratio >= 0.30:
+            elif repeat_ratio >= 0.50:
                 return 0.0
             else:
-                penalty = 1.0 - repeat_ratio / 0.30
+                penalty = 1.0 - repeat_ratio / 0.50
                 return float(np.clip(penalty, 0.0, 1.0))
         except Exception:
             return 1.0

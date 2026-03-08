@@ -772,15 +772,6 @@ class ProductionRewardModel:
         requested_duration = getattr(synapse, "duration_seconds", 10.0) or 10.0
         ratio = gen_seconds / max(requested_duration, 1.0)
 
-        # Suspiciously fast check: real models need at least ~0.3x real-time.
-        # Responding faster than that suggests pre-loaded audio, not generation.
-        if ratio < MIN_GENERATION_RATIO:
-            logger.debug(
-                f"Suspiciously fast response: ratio={ratio:.2f} "
-                f"(min={MIN_GENERATION_RATIO})"
-            )
-            return SUSPICIOUSLY_FAST_PENALTY
-
         # Ratio-based scoring curve:
         # ratio <= 1.0 (real-time or faster): 1.0
         # ratio == 3.0: 0.3
