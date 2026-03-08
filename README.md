@@ -14,7 +14,7 @@
 
 ---
 
-TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **3 penalty multipliers**. The subnet ships with MusicGen (default) and ACE-Step 1.5 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
+TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **4 penalty multipliers**. The subnet ships with MusicGen (default) and ACE-Step 1.5 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
 
 **Testnet netuid: 234** | **Mainnet: TBD**
 
@@ -38,7 +38,7 @@ graph TB
     subgraph Validators
         V[Validator Node]
         CG[Challenge Generator<br/>100k+ prompt combos]
-        SC[Scoring Pipeline<br/>18 scorers + 3 penalties]
+        SC[Scoring Pipeline<br/>18 scorers + 4 penalties]
         MS[Multi-Scale Evaluator]
         LB[EMA Leaderboard]
         WS[Weight Setter]
@@ -75,7 +75,7 @@ graph TB
     V -->|organic fan-out| M2
 ```
 
-**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 3 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
+**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen, ACE-Step 1.5, Stable Audio, or any custom model), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO. The baseline models are starting points -- miners who innovate with better models earn higher scores.
 
@@ -161,7 +161,7 @@ For the full architecture reference and SaaS layer setup, see [docs/setup.md](do
 
 ## Scoring System
 
-Every validation round, miners are scored across **18 weighted signals** grouped into five categories. Weights are configurable via environment variables and must sum to 1.0.
+Every validation round, miners are scored across **18 weighted signals** grouped into five categories, with **4 penalty multipliers** applied to the final composite. Weights are consensus-critical constants hardcoded in `tuneforge/config/scoring_config.py` and must sum to 1.0.
 
 ### Scoring Signals
 
@@ -201,7 +201,7 @@ Every validation round, miners are scored across **18 weighted signals** grouped
 Penalties are applied as multipliers on the final composite score, not as weighted components:
 
 ```
-final_score = composite * duration_penalty * artifact_penalty * fad_penalty
+final_score = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
 ```
 
 | Penalty | Trigger | Effect |
@@ -209,8 +209,9 @@ final_score = composite * duration_penalty * artifact_penalty * fad_penalty
 | **Silence** | Audio RMS below 0.01 | Hard zero (score = 0.0) |
 | **Timeout** | Round-trip exceeds 300s | Hard zero (score = 0.0) |
 | **Duration** | Audio duration off-target by >20% | Linear penalty (1.0 at 20% to 0.0 at 50%) |
-| **Artifacts** | Spectral discontinuities, clipping, loops | Multiplier (0.0 - 1.0) |
+| **Artifacts** | Spectral discontinuities, clipping, loops | Geometric mean of 4 checks (floor 0.1 each) |
 | **FAD** | Per-miner Frechet Audio Distance divergence | Sigmoid penalty (floor 0.5) |
+| **Fingerprint** | Chromaprint dedup + AcoustID known-song match | Multiplier (0.0 - 1.0) |
 
 ### Speed Scoring
 
@@ -287,7 +288,9 @@ TuneForge employs multiple layered mechanisms to prevent miners from gaming the 
 
 **Diversity Tracking.** CLAP embeddings of each miner's recent 50 outputs are tracked. Diversity scoring combines intra-miner variety (70%) with population-level diversity bonus (30%), encouraging both self-diversity and differentiation from other miners. The DiversityScorer shares the CLAP model instance with the main scorer to save ~600MB GPU memory.
 
-**Hard Penalties.** Silence detection (RMS < 0.01), timeout enforcement (300s), payload validation (20MB max, 180s max duration), and artifact detection (clipping, spectral discontinuities, looping) act as binary or continuous multipliers that cannot be circumvented by high signal scores.
+**Fingerprint Detection.** Chromaprint audio fingerprinting detects duplicate submissions (same miner re-submitting identical audio). AcoustID lookup catches audio copied from known commercial recordings. Both apply as penalty multipliers on the final score.
+
+**Hard Penalties.** Silence detection (RMS < 0.01), timeout enforcement (300s), payload validation (20MB max, 180s max duration), and artifact detection (clipping, spectral discontinuities, looping) act as binary or continuous multipliers that cannot be circumvented by high signal scores. Artifact detection uses a geometric mean of 4 checks (spectral discontinuity, clipping, repetition, spectral holes) with a 0.1 floor per check, so one marginal check doesn't zero the entire score.
 
 **EMA Smoothing.** The alpha of 0.2 means a single exceptional round cannot dramatically change a miner's standing. Consistent quality over time is required.
 

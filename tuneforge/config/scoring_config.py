@@ -191,15 +191,6 @@ FAD_PENALTY_FLOOR: float = 0.5
 FINGERPRINT_ACOUSTID_THRESHOLD: float = 0.80  # AcoustID match score threshold
 
 # ---------------------------------------------------------------------------
-# Minimum generation time (anti-copy penalty)
-# If a miner responds faster than MIN_GENERATION_RATIO * requested_duration,
-# the speed score is penalized. Real models need at least ~0.3x real-time
-# for inference. Responding in <0.3x suggests pre-loaded audio.
-# ---------------------------------------------------------------------------
-MIN_GENERATION_RATIO: float = 0.3  # Minimum gen_time/duration ratio
-SUSPICIOUSLY_FAST_PENALTY: float = 0.1  # Speed score when too fast
-
-# ---------------------------------------------------------------------------
 # EnCodec model (neural codec quality)
 # ---------------------------------------------------------------------------
 ENCODEC_MODEL: str = "facebook/encodec_24khz"

@@ -5,7 +5,7 @@ Combines signal sources into a single 0-1 reward per miner response.
 Prompt adherence is the primary user-facing signal; quality prevents
 technical defects from reaching users.
 
-18 weighted scorers + 5 penalty multipliers + multi-scale evaluation.
+18 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
 
 Prompt adherence (24%):
 - CLAP text-audio similarity   (15%)  — kept at 15% to avoid gaming amplification
@@ -46,7 +46,6 @@ Penalties (applied as multipliers, not weighted components):
 - FAD penalty                   — per-miner Frechet Audio Distance from real music
 - Fingerprint penalty           — Chromaprint dedup + AcoustID known-song detection
 Hard penalties override composite scores (silence, timeout).
-Speed scorer includes minimum generation time check (anti-copy).
 
 Multi-scale evaluation adjusts weights based on audio duration:
 - Short clips (<10s): emphasize production quality
@@ -84,8 +83,6 @@ from tuneforge.config.scoring_config import (
     FAD_PENALTY_STEEPNESS,
     FAD_PENALTY_FLOOR,
     VALIDATOR_PERTURBATION_SECRET,
-    MIN_GENERATION_RATIO,
-    SUSPICIOUSLY_FAST_PENALTY,
 )
 from tuneforge.scoring.artifact_detector import ArtifactDetector
 from tuneforge.scoring.fingerprint_scorer import FingerprintScorer
