@@ -429,11 +429,12 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                 # Find next epoch-aligned slot for this validator
                 now = time.time()
                 cycle_number = int(now / base_interval)
-                jitter = self._compute_cycle_jitter(cycle_number + 1)
-                target = (cycle_number + 1) * base_interval + stagger_offset + jitter
-                # If round took so long we missed the next slot, skip ahead
+                target = cycle_number * base_interval + stagger_offset
+                # If we've already passed this cycle's slot, use next cycle
                 if target <= now:
                     target += base_interval
+                jitter = self._compute_cycle_jitter(int(target / base_interval))
+                target += jitter
                 remaining = target - now
 
                 if remaining > 0:
