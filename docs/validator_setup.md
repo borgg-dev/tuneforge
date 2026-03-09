@@ -10,7 +10,7 @@ A TuneForge validator performs the following duties:
 
 1. **Generates diverse music challenges** from a combinatorial space of genre, mood, tempo, key signature, instruments, vocals/lyrics requests, and creative constraints (100,000+ unique combinations per challenge). Duration range: 1--180 seconds.
 2. **Sends challenges to miners** in batches via Bittensor dendrite.
-3. **Scores responses** across 18 independent scoring dimensions, 3 penalty multipliers, and a set of hard-zero conditions.
+3. **Scores responses** across 16 independent scoring dimensions, 4 penalty multipliers, and a set of hard-zero conditions.
 4. **Applies multi-scale evaluation** that adjusts scorer weights based on the requested duration (short, medium, long).
 5. **Applies genre-aware scoring** with per-genre targets across 9 genre families.
 6. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time. EMA state is persisted to disk.
@@ -91,7 +91,7 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_VALIDATION_INTERVAL` | int | `300` | Seconds between validation rounds |
 | `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Number of miners to challenge per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
-| `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
+| `TF_WEIGHT_SETTER_STEP` | int | `115` | Blocks between weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 
 ### EMA Persistence
@@ -137,7 +137,7 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_LOG_DIR` | str | `/tmp/tuneforge` | Directory for log files |
 | `TF_WANDB_ENABLED` | bool | `false` | Enable Weights & Biases logging |
 | `TF_WANDB_ENTITY` | str | None | W&B entity (team or username) |
-| `TF_WANDB_PROJECT` | str | None | W&B project name |
+| `TF_WANDB_PROJECT` | str | `tuneforge` | W&B project name |
 
 ### Minimal Example
 
@@ -183,36 +183,34 @@ The `Dockerfile.validator` uses `python:3.11-slim` (no CUDA) and pre-downloads t
 
 ## The Scoring Pipeline
 
-Every validation round, the validator scores each miner response across 18 dimensions, applies 3 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
+Every validation round, the validator scores each miner response across 16 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
 
 ```
-final = composite * duration_penalty * artifact_penalty * fad_penalty
+final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
 ```
 
 All scoring weights and thresholds described below are **hardcoded for consensus**. Validators cannot modify them. This ensures all validators produce consistent scores.
 
-### The 18 Scoring Dimensions
+### The 16 Scoring Dimensions
 
 | # | Scorer | Weight | Description |
 |---|--------|--------|-------------|
-| 1 | **CLAP Adherence** | 0.15 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity between text prompt embedding and audio embedding is remapped from [0.15, 0.75] to [0, 1]. The primary signal: does the audio match the prompt? |
-| 2 | **Attribute Verification** | 0.09 | Verifies specific musical attributes (tempo, key, instruments) via librosa analysis and CLAP zero-shot classification. |
+| 1 | **CLAP Adherence** | 0.19 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity between text prompt embedding and audio embedding is remapped from [0.15, 0.75] to [0, 1]. The primary signal: does the audio match the prompt? |
+| 2 | **Attribute Verification** | 0.11 | Verifies specific musical attributes (tempo, key, instruments) via librosa analysis and CLAP zero-shot classification. |
 | 3 | **Musicality** | 0.09 | Pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement quality. Genre-aware targets. One-sided minimum floor (not bell curve). |
 | 4 | **Vocal Lyrics** | 0.08 | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, and sibilance control. Returns neutral 0.5 for instrumental genres unless `vocals_requested=True`. |
-| 5 | **Diversity** | 0.08 | CLAP embedding diversity across a 50-entry history per miner. Computed as 70% intra-miner diversity + 30% population-level diversity bonus. Miners recycling similar outputs score low. |
-| 6 | **Preference Model** | 0.07 base | Perceptual quality via trained preference head. Bootstrap mode returns neutral 0.5 (effective weight 0%). Auto-scales from 2% to 20% via PreferenceWeightScaler as the model trains and gains accuracy. |
-| 7 | **Melody Coherence** | 0.06 | Interval quality, pitch contour analysis, repetition structure, and memorability. One-sided minimum floor. |
-| 8 | **Structural Completeness** | 0.06 | Section count, section variety, intro/outro presence, and transition quality. One-sided minimum floor. No longer penalizes electronic music or strong openings. |
+| 5 | **Preference Model** | 0.07 base | Perceptual quality via trained preference head. Bootstrap mode returns neutral 0.5 (effective weight 0%). Auto-scales from 2% to 20% via PreferenceWeightScaler as the model trains and gains accuracy. |
+| 6 | **Melody Coherence** | 0.06 | Interval quality, pitch contour analysis, repetition structure, and memorability. One-sided minimum floor. |
+| 7 | **Structural Completeness** | 0.06 | Section count, section variety, intro/outro presence, and transition quality. One-sided minimum floor. No longer penalizes electronic music or strong openings. |
+| 8 | **Diversity** | 0.06 | CLAP embedding diversity across a 50-entry history per miner. Computed as 70% intra-miner diversity + 30% population-level diversity bonus. Miners recycling similar outputs score low. |
 | 9 | **Production Quality** | 0.05 | Spectral balance, frequency fullness, loudness consistency (LUFS), dynamic expressiveness, and stereo width. Genre-aware targets. |
 | 10 | **Neural Quality (MERT)** | 0.05 | Uses `m-a-p/MERT-v1-95M` learned representations to assess temporal coherence, activation strength, layer agreement, and periodicity. |
-| 11 | **Timbral Naturalness** | 0.05 | Spectral envelope naturalness, harmonic decay characteristics, transient quality, temporal envelope, and spectral flux consistency. |
-| 12 | **Vocal Quality** | 0.04 | Vocal presence, clarity, pitch consistency, and harmonic richness. Genre-aware: returns neutral 0.5 for instrumental genres. When `vocals_requested=True`, vocal scorer weight is boosted 1.5x and vocal_lyrics is boosted 2x. |
-| 13 | **Mix Separation** | 0.04 | Spectral clarity, frequency masking analysis, spatial depth, low-end definition, and mid-range presence. |
+| 11 | **Vocal Quality** | 0.04 | Vocal presence, clarity, pitch consistency, and harmonic richness. Genre-aware: returns neutral 0.5 for instrumental genres. When `vocals_requested=True`, vocal scorer weight is boosted 1.5x and vocal_lyrics is boosted 2x. |
+| 12 | **Mix Separation** | 0.04 | Spectral clarity, frequency masking analysis, spatial depth, low-end definition, and mid-range presence. |
+| 13 | **Timbral Naturalness** | 0.03 | Spectral envelope naturalness, harmonic decay characteristics, transient quality, temporal envelope, and spectral flux consistency. |
 | 14 | **Learned MOS** | 0.03 | Multi-resolution perceptual quality estimation: waveform quality, codec robustness, perceptual loudness, and harmonic richness. |
 | 15 | **Audio Quality** | 0.02 | Signal-level analysis: harmonic ratio, onset quality, spectral contrast, dynamic range, and temporal variation. |
 | 16 | **Speed** | 0.02 | Duration-relative speed scoring (see below). |
-| 17 | **Perceptual Quality** | 0.01 | Bandwidth consistency, signal-to-noise ratio, harmonic noise ratio, and high-frequency presence. |
-| 18 | **Neural Codec** | 0.01 | EnCodec reconstruction quality and naturalness assessment. |
 
 ### Speed Scoring
 
@@ -230,7 +228,7 @@ ratio = generation_time / requested_duration
 
 Uses validator-measured `dendrite.process_time`, not miner-reported time. If no validator timing is available, defaults to 0.5.
 
-### 3 Penalty Multipliers
+### 4 Penalty Multipliers
 
 These are applied multiplicatively to the composite score after dimension scoring.
 
@@ -239,6 +237,7 @@ These are applied multiplicatively to the composite score after dimension scorin
 | **Duration** | Requested vs. actual duration mismatch | Within 20% tolerance: no penalty. Linear decay from 1.0 to 0.0 between 20% and 50% deviation. Beyond 50%: multiplier = 0.0. |
 | **Artifact** | Clipping, loops, spectral discontinuities, spectral holes | Multiplier on final score based on artifact severity. |
 | **FAD** | Per-miner Frechet Audio Distance | Sigmoid curve with midpoint=15, steepness=2, floor=0.5. Reference stats loaded from `TF_FAD_REFERENCE_STATS_PATH`. |
+| **Fingerprint** | Chromaprint dedup + AcoustID known-song match | Multiplier (0.0 - 1.0) based on fingerprint match score. |
 
 ### Hard-Zero Conditions
 
@@ -364,7 +363,7 @@ The tier boundary creates a sharp incentive cliff: breaking into the top 10 prov
 
 ### Weight Submission
 
-- Weights are submitted to the chain every 115 blocks (`TF_WEIGHT_UPDATE_INTERVAL`).
+- Weights are submitted to the chain every 115 blocks (`TF_WEIGHT_SETTER_STEP`).
 - All weights are normalized to sum to 1.0.
 - Uses `bt.utils.weight_utils.process_weights_for_netuid` for chain compatibility.
 - The validator waits for finalization and inclusion before proceeding.
@@ -380,7 +379,7 @@ The flow:
 1. SaaS backend sends a POST to the validator's `/organic/generate` endpoint.
 2. Validator selects the top miners by EMA using a composite miner selection strategy.
 3. Fan-out: the prompt is sent to K=3 miners concurrently.
-4. All valid responses pass through a quality gate using the same 18-scorer pipeline used for challenges.
+4. All valid responses pass through a quality gate using the same 16-scorer pipeline used for challenges.
 5. Scores update the EMA leaderboard (organic and challenge scores share the same EMA).
 6. The best result (by composite score) is returned to the SaaS backend.
 

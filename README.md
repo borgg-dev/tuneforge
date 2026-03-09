@@ -14,7 +14,7 @@
 
 ---
 
-TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **18 weighted quality scorers** and **4 penalty multipliers**. The subnet ships with MusicGen (default) and ACE-Step 1.5 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
+TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **16 weighted quality scorers** and **4 penalty multipliers**. The subnet ships with MusicGen (default) and ACE-Step 1.5 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
 
 **Testnet netuid: 234** | **Mainnet: TBD**
 
@@ -75,7 +75,7 @@ graph TB
     V -->|organic fan-out| M2
 ```
 
-**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 18 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
+**Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 16 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
 
 **Miners** run a generation backend (MusicGen, ACE-Step 1.5, Stable Audio, or any custom model), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO. The baseline models are starting points -- miners who innovate with better models earn higher scores.
 
@@ -242,9 +242,9 @@ The scoring pipeline adjusts quality targets based on detected genre across 9 ge
 ```mermaid
 graph LR
     A[Challenge] --> B[Miner Responses]
-    B --> C[18-Signal Scoring]
+    B --> C[16-Signal Scoring]
     C --> D[Multi-Scale Adjust]
-    D --> E[3 Penalty Multipliers]
+    D --> E[4 Penalty Multipliers]
     E --> F[Round Score]
     F --> G[EMA Update]
     G --> H[Tiered Weighting]
@@ -272,7 +272,7 @@ Within each tier, weight is distributed proportionally to `ema ^ 2.0` (quadratic
 
 ### Weight Submission
 
-Weights are submitted on-chain every 115 blocks (`TF_WEIGHT_UPDATE_INTERVAL`). Validation rounds run every 300 seconds (`TF_VALIDATION_INTERVAL`), with 8 miners challenged per round (`TF_CHALLENGE_BATCH_SIZE`).
+Weights are submitted on-chain every 115 blocks (`TF_WEIGHT_SETTER_STEP`). Validation rounds run every 300 seconds (`TF_VALIDATION_INTERVAL`), with 8 miners challenged per round (`TF_CHALLENGE_BATCH_SIZE`).
 
 ## Anti-Gaming
 
@@ -377,7 +377,7 @@ See the [Scoring Signals](#scoring-signals) table for the full weight distributi
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_VALIDATION_INTERVAL` | int | 300 | Seconds between rounds |
-| `TF_WEIGHT_UPDATE_INTERVAL` | int | 115 | Blocks between weight sets |
+| `TF_WEIGHT_SETTER_STEP` | int | 115 | Blocks between weight sets |
 | `TF_EMA_STATE_PATH` | str | ./ema_state.json | EMA persistence file path |
 | `TF_EMA_SAVE_INTERVAL` | int | 5 | Blocks between EMA saves |
 | `TF_FAD_REFERENCE_STATS_PATH` | str | ./reference_fad_stats.npz | FAD reference statistics file |

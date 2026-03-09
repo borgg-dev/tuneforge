@@ -120,29 +120,7 @@ class Settings(BaseSettings):
         description="Maximum concurrent validation tasks"
     )
 
-    # Scoring weights
-    audio_quality_weight: float = Field(
-        default=0.3,
-        description="Weight for audio quality score"
-    )
-    prompt_adherence_weight: float = Field(
-        default=0.4,
-        description="Weight for prompt adherence (CLAP) score"
-    )
-    musicality_weight: float = Field(
-        default=0.2,
-        description="Weight for musicality score"
-    )
-    novelty_weight: float = Field(
-        default=0.1,
-        description="Weight for novelty/diversity score"
-    )
-
-    # CLAP scoring
-    clap_model_name: str = Field(
-        default="laion/larger_clap_music",
-        description="CLAP model for text-audio similarity"
-    )
+    # Preference model
     preference_model_path: Optional[str] = Field(
         default=None,
         description="Path to trained preference model checkpoint (.pt file)",

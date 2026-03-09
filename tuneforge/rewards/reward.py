@@ -5,40 +5,36 @@ Combines signal sources into a single 0-1 reward per miner response.
 Prompt adherence is the primary user-facing signal; quality prevents
 technical defects from reaching users.
 
-18 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
+16 weighted scorers + 4 penalty multipliers + multi-scale evaluation.
 
-Prompt adherence (24%):
-- CLAP text-audio similarity   (15%)  — kept at 15% to avoid gaming amplification
-- Attribute verification        (9%)  — tempo, key, instruments (concrete, less gameable)
+Prompt adherence (30%):
+- CLAP text-audio similarity  (19%)  — primary prompt matching signal
+- Attribute verification      (11%)  — tempo, key, instruments (concrete, less gameable)
 
 Composition (21%):
-- Musicality metrics            (9%)  — pitch, harmony, rhythm, arrangement, chords
-- Melody coherence              (6%)  — melodic intervals, contour, structure
-- Structural completeness       (6%)  — section detection, song form
+- Musicality metrics           (9%)  — pitch, harmony, rhythm, arrangement, chords
+- Melody coherence             (6%)  — melodic intervals, contour, structure
+- Structural completeness      (6%)  — section detection, song form
 
 Production & fidelity (16%):
-- Production quality metrics    (5%)  — spectral balance, loudness, dynamics, stereo
-- Neural quality (MERT)         (5%)  — learned music representations
-- Harmonic quality              (4%)  — vocal presence, clarity, formant structure
-- Audio quality metrics         (2%)  — signal-level analysis
+- Production quality metrics   (5%)  — spectral balance, loudness, dynamics, stereo
+- Neural quality (MERT)        (5%)  — learned music representations
+- Harmonic quality             (4%)  — vocal presence, clarity, formant structure
+- Audio quality metrics        (2%)  — signal-level analysis
 
-Naturalness & mix (20%):
-- Vocal/lyrics quality          (8%)  — vocal clarity, lyrics intelligibility, pitch, sibilance
-- Timbral naturalness           (5%)  — spectral envelope, harmonic decay, transients
-- Mix separation                (4%)  — spectral clarity, frequency masking, spatial depth
-- Multi-resolution quality      (3%)  — multi-resolution perceptual quality estimation
-
-Perceptual quality (2%):
-- Perceptual quality            (1%)  — spectral MOS estimator
-- Neural codec quality          (1%)  — EnCodec reconstruction quality
+Naturalness & mix (18%):
+- Vocal/lyrics quality         (8%)  — vocal clarity, lyrics intelligibility, pitch, sibilance
+- Mix separation               (4%)  — spectral clarity, frequency masking, spatial depth
+- Timbral naturalness          (3%)  — spectral envelope, harmonic decay, transients
+- Multi-resolution quality     (3%)  — multi-resolution perceptual quality estimation
 
 Preference (0% bootstrap / 2-20% when trained):
-- Preference model              — learned human preference (auto-scales 2-20%)
+- Preference model             (7% base) — learned human preference (auto-scales 2-20%)
   Zeroed out in bootstrap mode (no trained model); weight redistributed to other scorers.
 
-Other (10%):
-- Diversity                     (8%)  — intra-miner + population-level diversity
-- Speed                         (2%)  — duration-relative: gen_time/requested_duration
+Other (8%):
+- Diversity                    (6%)  — intra-miner + population-level diversity
+- Speed                        (2%)  — duration-relative: gen_time/requested_duration
 
 Penalties (applied as multipliers, not weighted components):
 - Duration penalty              — linear ramp for off-target duration
@@ -112,7 +108,7 @@ class ProductionRewardModel:
     """Full scoring pipeline combining all signal sources."""
 
     def __init__(self, config: Settings) -> None:
-        self._clap = CLAPScorer(model_name=config.clap_model_name)
+        self._clap = CLAPScorer()
         self._quality = AudioQualityScorer()
         self._musicality = MusicalityScorer()
         self._production = ProductionQualityScorer()
