@@ -491,6 +491,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
                     f"ema={ema:.4f}, weight={weight:.4f}"
                 )
 
+        # 7. Decay EMA for non-responding miners (score 0.0)
+        valid_uid_set = set(valid_uids)
+        non_responding = [uid for uid in miner_uids if uid not in valid_uid_set]
+        for uid in non_responding:
+            self._leaderboard.update(uid, 0.0)
+        if non_responding:
+            logger.info(f"Applied score=0.0 to {len(non_responding)} non-responding miners")
+
         # 8. Save leaderboard snapshot for the organic query router
         try:
             snapshot_path = str(Path(self.settings.storage_path) / "leaderboard.json")
