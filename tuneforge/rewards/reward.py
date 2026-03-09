@@ -146,7 +146,7 @@ class ProductionRewardModel:
             acoustid_api_key=getattr(config, "acoustid_api_key", "") or "",
         )
         self._config = config
-        logger.info("ProductionRewardModel initialised (18 scorers + 4 penalties + multi-scale)")
+        logger.info("ProductionRewardModel initialised (16 scorers + 4 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
     # Public API

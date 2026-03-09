@@ -162,30 +162,28 @@ Any of the following results in an immediate score of 0:
 | Silence | RMS < 0.01 |
 | Timeout | > 300 seconds |
 
-### Scoring Components (18 Scorers)
+### Scoring Components (16 Scorers)
 
 All weights are **hardcoded** in `scoring_config.py` for validator consensus. They are NOT configurable via environment variables. Weights sum to 1.0.
 
 | Component | Weight | Model / Method | Description |
 |-----------|--------|----------------|-------------|
-| `clap` | 0.15 | `laion/larger_clap_music` | CLAP text-audio cosine similarity (prompt adherence). Raw similarity in [0.15, 0.75] mapped to [0, 1]. |
-| `attribute` | 0.09 | Rule-based | Attribute verification (genre, mood, tempo, key, instruments) |
+| `clap` | 0.19 | `laion/larger_clap_music` | CLAP text-audio cosine similarity (prompt adherence). Raw similarity in [0.15, 0.75] mapped to [0, 1]. |
+| `attribute` | 0.11 | Rule-based | Attribute verification (genre, mood, tempo, key, instruments) |
 | `musicality` | 0.09 | Librosa analysis | Rhythmic and harmonic analysis with one-sided minimum floor |
 | `vocal_lyrics` | 0.08 | Whisper | Lyrics intelligibility, vocal clarity, pitch accuracy |
-| `diversity` | 0.08 | Embedding cache (50 entries) | Output diversity across rounds + population-level diversity bonus |
 | `preference` | 0.07 | PreferenceHead / DualPreferenceHead | Learned preference model. 0% at bootstrap, auto-scales 2--20% based on validation accuracy. Bradley-Terry pairwise loss. |
 | `melody` | 0.06 | Melodic contour analysis | Melodic coherence and development with one-sided minimum floor |
 | `structural` | 0.06 | Section detection | Structural completeness (intro, development, outro) with one-sided minimum floor |
+| `diversity` | 0.06 | Embedding cache (50 entries) | Output diversity across rounds + population-level diversity bonus |
 | `production` | 0.05 | Spectral analysis | Production quality (mixing, mastering characteristics) |
 | `neural_quality` | 0.05 | `m-a-p/MERT-v1-95M` | MERT-based neural audio quality assessment |
-| `timbral` | 0.05 | Spectral envelope analysis | Spectral envelope, harmonic decay, transient analysis |
 | `vocal` | 0.04 | Vocal detection + analysis | Vocal quality when vocals are present |
 | `mix_separation` | 0.04 | Frequency analysis | Spectral clarity, frequency masking, spatial depth |
+| `timbral` | 0.03 | Spectral envelope analysis | Spectral envelope, harmonic decay, transient analysis |
 | `learned_mos` | 0.03 | Multi-resolution CNN | Multi-resolution perceptual quality estimation |
 | `quality` | 0.02 | Classic DSP metrics | Classic audio quality sub-metrics (see below) |
 | `speed` | 0.02 | `dendrite.process_time` | Duration-relative generation speed (see below) |
-| `perceptual` | 0.01 | Perceptual model | Perceptual audio quality |
-| `neural_codec` | 0.01 | EnCodec | Neural codec reconstruction quality |
 
 ### Audio Quality Sub-Weights
 
@@ -860,7 +858,7 @@ tuneforge/
       scoring.py                         # Score aggregation
       leaderboard.py                     # EMA leaderboard
       weight_setter.py                   # On-chain weight submission
-    scoring/                             # 18 scorer modules + support modules
+    scoring/                             # 16 scorer modules + support modules
       __init__.py
       clap_scorer.py                     # CLAP text-audio similarity (laion/larger_clap_music)
       audio_quality.py                   # Classic audio quality sub-metrics

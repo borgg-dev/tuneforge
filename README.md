@@ -38,7 +38,7 @@ graph TB
     subgraph Validators
         V[Validator Node]
         CG[Challenge Generator<br/>100k+ prompt combos]
-        SC[Scoring Pipeline<br/>18 scorers + 4 penalties]
+        SC[Scoring Pipeline<br/>16 scorers + 4 penalties]
         MS[Multi-Scale Evaluator]
         LB[EMA Leaderboard]
         WS[Weight Setter]
@@ -161,19 +161,19 @@ For the full architecture reference and SaaS layer setup, see [docs/setup.md](do
 
 ## Scoring System
 
-Every validation round, miners are scored across **18 weighted signals** grouped into five categories, with **4 penalty multipliers** applied to the final composite. Weights are consensus-critical constants hardcoded in `tuneforge/config/scoring_config.py` and must sum to 1.0.
+Every validation round, miners are scored across **16 weighted signals** grouped into five categories, with **4 penalty multipliers** applied to the final composite. Weights are consensus-critical constants hardcoded in `tuneforge/config/scoring_config.py` and must sum to 1.0.
 
 ### Scoring Signals
 
 | Signal | Weight | Category |
 |--------|--------|----------|
-| **CLAP Adherence** | 15% | Prompt Adherence |
-| **Attribute Verification** | 9% | Prompt Adherence |
+| **CLAP Adherence** | 19% | Prompt Adherence |
+| **Attribute Verification** | 11% | Prompt Adherence |
 | **Musicality** | 9% | Composition |
 | **Melody Coherence** | 6% | Composition |
 | **Structural Completeness** | 6% | Composition |
 | **Vocal & Lyrics** | 8% | Naturalness & Mix |
-| **Timbral Naturalness** | 5% | Naturalness & Mix |
+| **Timbral Naturalness** | 3% | Naturalness & Mix |
 | **Mix Separation** | 4% | Naturalness & Mix |
 | **Learned MOS** | 3% | Naturalness & Mix |
 | **Neural Quality (MERT)** | 5% | Production & Fidelity |
@@ -181,12 +181,10 @@ Every validation round, miners are scored across **18 weighted signals** grouped
 | **Vocal Quality** | 4% | Production & Fidelity |
 | **Audio Quality** | 2% | Production & Fidelity |
 | **Preference Model** | 7% base (0% bootstrap, 2-20% trained) | Learned Preference |
-| **Perceptual Quality** | 1% | Perceptual |
-| **Neural Codec Quality** | 1% | Perceptual |
-| **Diversity** | 8% | Other |
+| **Diversity** | 6% | Other |
 | **Speed** | 2% | Other |
 
-**CLAP Adherence** (15%) measures how well the generated audio matches the text prompt using `laion/larger_clap_music` text-audio cosine similarity, mapped from a floor of 0.15 to a ceiling of 0.75.
+**CLAP Adherence** (19%) measures how well the generated audio matches the text prompt using `laion/larger_clap_music` text-audio cosine similarity, mapped from a floor of 0.15 to a ceiling of 0.75.
 
 **Neural Quality** uses the MERT model (`m-a-p/MERT-v1-95M`) to evaluate temporal coherence, activation strength, layer agreement, and structural periodicity. **Musicality** analyzes pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement sophistication. **Production Quality** checks spectral balance, frequency fullness, loudness consistency, dynamic expressiveness, and stereo quality.
 

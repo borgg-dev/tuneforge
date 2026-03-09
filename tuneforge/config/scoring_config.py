@@ -43,14 +43,13 @@ BURN_WEIGHT: float = _env_float("TF_BURN_WEIGHT", 0.0)
 # Scoring composite weights  (must sum to 1.0)
 #
 # Balanced across prompt adherence, composition, and production quality.
-# Quality is spread across 18 independent scorers for gaming resistance.
-#   Prompt adherence:  clap + attribute                                = 24%
+# Quality is spread across 16 active scorers for gaming resistance.
+#   Prompt adherence:  clap + attribute                                = 30%
 #   Composition:       musicality + melody + structural                = 21%
 #   Production/fidelity: production + neural_quality + vocal + quality = 16%
-#   Naturalness/mix:   vocal_lyrics + timbral + mix_sep + learned_mos  = 20%
-#   Perceptual:        perceptual + neural_codec                       =  2%
+#   Naturalness/mix:   vocal_lyrics + timbral + mix_sep + learned_mos  = 18%
 #   Preference:        preference                              = 0% (bootstrap) / 2-20% (trained)
-#   Other:             diversity + speed                               = 10%
+#   Other:             diversity + speed                               =  8%
 #
 # NOTE: preference weight is zeroed in bootstrap mode (no trained model).
 # Its 7% base weight is redistributed to other scorers via renormalization.
@@ -60,9 +59,9 @@ BURN_WEIGHT: float = _env_float("TF_BURN_WEIGHT", 0.0)
 # explicitly requested, then renormalizes.
 # ---------------------------------------------------------------------------
 SCORING_WEIGHTS: dict[str, float] = {
-    # Prompt adherence (24%)
-    "clap": 0.15,
-    "attribute": 0.09,
+    # Prompt adherence (30%)
+    "clap": 0.19,
+    "attribute": 0.11,
     # Composition (21%)
     "musicality": 0.09,
     "melody": 0.06,
@@ -74,16 +73,13 @@ SCORING_WEIGHTS: dict[str, float] = {
     "quality": 0.02,
     # Preference (7% base — zeroed in bootstrap, auto-scaled 2-20% when trained)
     "preference": 0.07,
-    # Perceptual (2%)
-    "perceptual": 0.01,
-    "neural_codec": 0.01,
-    # Naturalness & mix (20%)
+    # Naturalness & mix (18%)
     "vocal_lyrics": 0.08,
-    "timbral": 0.05,
+    "timbral": 0.03,
     "mix_separation": 0.04,
     "learned_mos": 0.03,
-    # Other (10%)
-    "diversity": 0.08,
+    # Other (8%)
+    "diversity": 0.06,
     "speed": 0.02,
 }
 
