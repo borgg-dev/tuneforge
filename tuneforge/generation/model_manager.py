@@ -24,7 +24,7 @@ class ModelManager:
 
     def __init__(
         self,
-        default_backend: str = "musicgen",
+        default_backend: str = "ace_step",
         model_size: str = "medium",
         device: str = "cuda",
     ) -> None:

@@ -35,10 +35,10 @@ Minimum hardware specifications (from `min_compute.yml`):
 
 | Model | `TF_MODEL_NAME` | VRAM | Sample Rate |
 |-------|-----------------|------|-------------|
-| **MusicGen Medium** (default) | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
+| **ACE-Step 1.5** (default) | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | 32 kHz mono |
 | MusicGen Large | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
-| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
 | Stable Audio | `stable_audio` | ~6 GB | 44.1 kHz |
 
 These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more TAO.
@@ -64,19 +64,9 @@ source venv/bin/activate
 pip install -e .
 ```
 
-### MusicGen Setup (Default Baseline)
+### ACE-Step 1.5 Setup (Default Baseline)
 
-MusicGen is the default baseline model. Install audiocraft separately because it pins specific torch versions:
-
-```bash
-pip install audiocraft --no-deps
-```
-
-Model weights are downloaded automatically from HuggingFace on first run.
-
-### ACE-Step 1.5 Setup (Alternative Baseline)
-
-ACE-Step 1.5 is an alternative baseline that uses a diffusion-based architecture to produce 48kHz stereo audio. It requires its own repository to be cloned alongside tuneforge.
+ACE-Step 1.5 is the default baseline model. It uses a diffusion-based architecture to produce 48kHz stereo audio. It requires its own repository to be cloned alongside tuneforge.
 
 ```bash
 # Clone the ACE-Step repo (from the tuneforge parent directory)
@@ -95,6 +85,18 @@ export ACESTEP_PATH=/path/to/ACE-Step-1.5
 ```
 
 On first startup, the miner will automatically download the model checkpoints from HuggingFace (~9.5 GB total: DiT model, VAE, text encoder, language model). This happens once and the files are cached in the `ACE-Step-1.5/checkpoints/` directory.
+
+### MusicGen Setup (Alternative Baseline)
+
+MusicGen is an alternative baseline model. Install audiocraft separately because it pins specific torch versions:
+
+```bash
+pip install audiocraft --no-deps
+```
+
+Model weights are downloaded automatically from HuggingFace on first run.
+
+Model weights are downloaded automatically from HuggingFace on first run.
 
 ### Bringing Your Own Model
 
@@ -131,7 +133,7 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 | `TF_NEURON_EPOCH_LENGTH` | int | `100` | Blocks between epochs |
 | `TF_NEURON_TIMEOUT` | int | `120` | Forward timeout in seconds |
 | `TF_AXON_PORT` | int | None | Axon serving port |
-| `TF_MODEL_NAME` | str | `facebook/musicgen-medium` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
+| `TF_MODEL_NAME` | str | `ace-step-1.5` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum audio duration in seconds |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Generation timeout in seconds |
@@ -147,19 +149,6 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 
 Note: Scoring weights are hardcoded on the validator side and are not configurable via environment variables. This ensures consensus across all validators.
 
-### Minimal Example (MusicGen)
-
-```bash
-TF_NETUID=234
-TF_SUBTENSOR_NETWORK=test
-TF_WALLET_NAME=my_wallet
-TF_WALLET_HOTKEY=my_hotkey
-TF_MODEL_NAME=facebook/musicgen-medium
-TF_GPU_DEVICE=cuda:0
-TF_AXON_PORT=8091
-TF_GENERATION_SAMPLE_RATE=32000
-```
-
 ### Minimal Example (ACE-Step)
 
 ```bash
@@ -171,6 +160,19 @@ TF_MODEL_NAME=ace-step-1.5
 TF_GPU_DEVICE=cuda:0
 TF_AXON_PORT=8091
 TF_GENERATION_SAMPLE_RATE=48000
+```
+
+### Minimal Example (MusicGen)
+
+```bash
+TF_NETUID=234
+TF_SUBTENSOR_NETWORK=test
+TF_WALLET_NAME=my_wallet
+TF_WALLET_HOTKEY=my_hotkey
+TF_MODEL_NAME=facebook/musicgen-medium
+TF_GPU_DEVICE=cuda:0
+TF_AXON_PORT=8091
+TF_GENERATION_SAMPLE_RATE=32000
 ```
 
 ---
@@ -213,10 +215,10 @@ The provided models are baselines to get you started. The real opportunity on Tu
 
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
-| **MusicGen Medium** | `facebook/musicgen-medium` | ~8 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer. |
+| **ACE-Step 1.5** | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | **Default baseline.** Diffusion-based, stereo output |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Moderate | 32 kHz mono | Autoregressive transformer |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
 | MusicGen Large | `facebook/musicgen-large` | ~16 GB | Slower | 32 kHz mono | Higher quality than MusicGen Medium |
-| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Diffusion-based, stereo output |
 | Stable Audio | `stable_audio` | ~6 GB | Moderate | 44.1 kHz | Different sonic aesthetic |
 
 ### Custom Models
@@ -234,13 +236,13 @@ Speed accounts for only 2% of the total score. Quality and adherence signals col
 Set the model in your `.env.miner` file:
 
 ```bash
-# MusicGen Medium (default baseline)
-TF_MODEL_NAME=facebook/musicgen-medium
-TF_GENERATION_SAMPLE_RATE=32000
-
-# Or ACE-Step 1.5 (alternative baseline, requires separate repo)
+# ACE-Step 1.5 (default baseline)
 TF_MODEL_NAME=ace-step-1.5
 TF_GENERATION_SAMPLE_RATE=48000
+
+# Or MusicGen Medium (alternative baseline)
+TF_MODEL_NAME=facebook/musicgen-medium
+TF_GENERATION_SAMPLE_RATE=32000
 ```
 
 ### ACE-Step Requirements
@@ -410,7 +412,7 @@ TF_WANDB_ENABLED=true
 
 ### CUDA Out of Memory
 
-MusicGen Medium requires ~8 GB VRAM. If you run out of memory, ensure no other processes are using the GPU. For very low-VRAM GPUs, fall back to MusicGen Small:
+ACE-Step 1.5 requires ~6 GB VRAM. If you run out of memory, ensure no other processes are using the GPU. For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small

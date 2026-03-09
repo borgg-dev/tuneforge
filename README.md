@@ -45,8 +45,8 @@ graph TB
     end
 
     subgraph Miners
-        M1[Miner 1<br/>MusicGen]
-        M2[Miner 2<br/>ACE-Step/Stable Audio]
+        M1[Miner 1<br/>ACE-Step]
+        M2[Miner 2<br/>MusicGen/Stable Audio]
         M3[Miner N<br/>Custom Model]
     end
 
@@ -349,7 +349,7 @@ All configuration is done through environment variables with the `TF_` prefix. V
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_MODEL_NAME` | str | facebook/musicgen-medium | Music generation model (see [Model Selection](docs/miner_setup.md#model-selection-guide)) |
+| `TF_MODEL_NAME` | str | ace-step-1.5 | Music generation model (see [Model Selection](docs/miner_setup.md#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | 30 | Max generation duration (s) |
 | `TF_GENERATION_SAMPLE_RATE` | int | 32000 | Audio sample rate (Hz) |
 | `TF_GENERATION_TIMEOUT` | int | 120 | Generation timeout (s) |
@@ -460,8 +460,8 @@ tuneforge/
 │   │   └── validator.py           -- TuneForgeValidator implementation
 │   ├── generation/
 │   │   ├── model_manager.py       -- Backend manager (lazy loading, GPU monitoring)
-│   │   ├── musicgen_backend.py    -- MusicGen generation backend (default)
-│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend
+│   │   ├── musicgen_backend.py    -- MusicGen generation backend
+│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend (default)
 │   │   ├── stable_audio_backend.py -- Stable Audio backend
 │   │   ├── audio_utils.py         -- Audio normalization, encoding, fades
 │   │   └── prompt_parser.py       -- Natural language prompt builder
