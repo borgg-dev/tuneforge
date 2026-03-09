@@ -179,7 +179,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 validator_uid=self.uid or -1,
             )
 
-        logger.info(f"Querying {len(miner_uids)} miners: UIDs={miner_uids[:20]}{'...' if len(miner_uids) > 20 else ''}")
+        logger.info(f"Querying {len(miner_uids)} miners")
 
         # 4. Query miners via dendrite
         axons = [self.metagraph.axons[uid] for uid in miner_uids]
