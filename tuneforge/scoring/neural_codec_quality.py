@@ -34,7 +34,7 @@ class NeuralCodecQualityScorer:
         try:
             from transformers import EncodecModel, AutoProcessor
 
-            self._processor = AutoProcessor.from_pretrained(self._model_name)
+            self._processor = AutoProcessor.from_pretrained(self._model_name, use_fast=True)
             self._model = EncodecModel.from_pretrained(self._model_name)
             self._model.eval()
             logger.info("Loaded EnCodec model: {}", self._model_name)

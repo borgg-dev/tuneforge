@@ -125,10 +125,14 @@ class LearnedMOSScorer:
 
             for n_fft in n_ffts:
                 hop = n_fft // 4
-                n_mels = min(128, n_fft // 4)
+                # Cap n_mels to avoid empty mel filters: need fewer bands
+                # than FFT bins covering the frequency range.
+                max_mels = n_fft // 8
+                n_mels = min(128, max_mels)
 
                 mel_spec = librosa.feature.melspectrogram(
                     y=audio, sr=sr, n_fft=n_fft, hop_length=hop, n_mels=n_mels,
+                    fmax=sr / 2.0,
                 )
                 mel_db = librosa.power_to_db(mel_spec + 1e-10, ref=np.max)
 
