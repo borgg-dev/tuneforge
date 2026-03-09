@@ -36,7 +36,7 @@ Minimum hardware specifications (from `min_compute.yml`):
 | Model | `TF_MODEL_NAME` | VRAM | Sample Rate |
 |-------|-----------------|------|-------------|
 | **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
-| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo |
+| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo (gated — requires HF login) |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | 32 kHz mono |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
@@ -104,7 +104,18 @@ Stable Audio Open 1.0 is the recommended alternative baseline (~6GB VRAM, 44.1kH
 pip install diffusers
 ```
 
-Model weights are downloaded automatically from HuggingFace on first run. Set `TF_MODEL_NAME=stable_audio` and `TF_GENERATION_SAMPLE_RATE=44100` in your `.env.miner` file.
+**Important:** Stable Audio Open 1.0 is a **gated model** on HuggingFace. Before using it, you must:
+
+1. Go to [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) and accept the license agreement.
+2. Create a HuggingFace access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+3. Log in on your miner machine:
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+```
+
+Once authenticated, model weights are downloaded automatically on first run. Set `TF_MODEL_NAME=stable_audio` and `TF_GENERATION_SAMPLE_RATE=44100` in your `.env.miner` file.
 
 ### Bringing Your Own Model
 
@@ -170,19 +181,6 @@ TF_AXON_PORT=8091
 TF_GENERATION_SAMPLE_RATE=32000
 ```
 
-### Minimal Example (MusicGen)
-
-```bash
-TF_NETUID=234
-TF_SUBTENSOR_NETWORK=test
-TF_WALLET_NAME=my_wallet
-TF_WALLET_HOTKEY=my_hotkey
-TF_MODEL_NAME=facebook/musicgen-large
-TF_GPU_DEVICE=cuda:0
-TF_AXON_PORT=8091
-TF_GENERATION_SAMPLE_RATE=32000
-```
-
 ---
 
 ## Running the Miner
@@ -224,7 +222,7 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
 | **MusicGen Large** | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer (3.3B params) |
-| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo |
+| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo. Gated model — requires HuggingFace login |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Requires separate repo clone |
