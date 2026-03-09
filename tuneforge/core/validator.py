@@ -75,6 +75,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._scoring_lock = asyncio.Lock()
         self._scoring_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scorer")
 
+        # Multi-validator status tracking
+        self._organic_active_count: int = 0
+        self._is_challenge_scoring: bool = False
+        self._start_time: float = time.time()
+        self._last_organic_score_sync: float = 0.0
+        self._seen_organic_ids: set[str] = set()  # dedup peer organic scores
+        self._seen_organic_ids_max = 10_000
+
         logger.info("TuneForgeValidator initialised")
 
     # ------------------------------------------------------------------
@@ -121,6 +129,116 @@ class TuneForgeValidator(BaseValidatorNeuron):
         else:
             logger.warning("No validator API URL/credentials — audio saved to filesystem only")
         logger.info("TuneForgeValidator setup complete")
+
+    # ------------------------------------------------------------------
+    # Status (for load-aware routing by platform LB)
+    # ------------------------------------------------------------------
+
+    def status(self) -> dict[str, Any]:
+        """Return validator status for the /status endpoint.
+
+        Used by the platform load balancer to make routing decisions.
+        """
+        state = "idle"
+        if self._is_challenge_scoring:
+            state = "scoring"
+        elif self._organic_active_count > 0:
+            state = "generating"
+
+        lb_summary = self._leaderboard.summary() if self._leaderboard else {}
+
+        return {
+            "state": state,
+            "organic_active": self._organic_active_count,
+            "is_challenge_scoring": self._is_challenge_scoring,
+            "current_round": self.current_round,
+            "is_running": self.is_running,
+            "uptime_seconds": int(time.time() - self._start_time),
+            "validator_uid": self.uid,
+            "leaderboard": {
+                "total_miners": lb_summary.get("total_miners", 0),
+                "with_weight": lb_summary.get("with_weight", 0),
+                "ema_max": lb_summary.get("ema_max", 0.0),
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Organic score sync (pull peer scores from platform API)
+    # ------------------------------------------------------------------
+
+    ORGANIC_SCORE_SYNC_INTERVAL: int = 90  # seconds
+
+    async def run_organic_score_sync(self) -> None:
+        """Background loop: pull organic scores from peer validators via
+        the platform API and fold them into the local EMA leaderboard.
+
+        This prevents EMA divergence across validators when organic traffic
+        is unevenly distributed.
+        """
+        if self._api_client is None:
+            logger.debug("No API client configured — organic score sync disabled")
+            return
+
+        while not self.should_exit:
+            await asyncio.sleep(self.ORGANIC_SCORE_SYNC_INTERVAL)
+            try:
+                await self._sync_peer_organic_scores()
+            except Exception as exc:
+                logger.debug("Organic score sync failed: {}", exc)
+
+    async def _sync_peer_organic_scores(self) -> None:
+        """Fetch and apply organic scores from peer validators."""
+        own_hotkey = ""
+        try:
+            own_hotkey = self.wallet.hotkey.ss58_address
+        except Exception:
+            return
+
+        params = {"since": self._last_organic_score_sync, "exclude_source": own_hotkey}
+        resp = await self._api_client.get("/api/v1/validator/organic-scores", params=params)
+        if resp.status_code == 404:
+            return  # endpoint not yet deployed on platform
+        resp.raise_for_status()
+        data = resp.json()
+
+        scores = data.get("scores", [])
+        if not scores:
+            return
+
+        applied = 0
+        for entry in scores:
+            score_id = entry.get("id", "")
+            if score_id in self._seen_organic_ids:
+                continue
+
+            miner_uid = entry.get("miner_uid")
+            score_val = entry.get("score")
+            if miner_uid is None or score_val is None:
+                continue
+
+            # Verify miner hotkey matches current metagraph (not recycled)
+            expected_hotkey = entry.get("miner_hotkey", "")
+            try:
+                actual_hotkey = self.metagraph.hotkeys[miner_uid]
+                if expected_hotkey and actual_hotkey != expected_hotkey:
+                    continue  # stale score for recycled UID
+            except (IndexError, AttributeError):
+                continue
+
+            self._leaderboard.update(miner_uid, float(score_val))
+            self._seen_organic_ids.add(score_id)
+            applied += 1
+
+        # Prune dedup set
+        if len(self._seen_organic_ids) > self._seen_organic_ids_max:
+            # Keep the most recent half
+            excess = len(self._seen_organic_ids) - self._seen_organic_ids_max // 2
+            for _ in range(excess):
+                self._seen_organic_ids.pop()
+
+        self._last_organic_score_sync = time.time()
+        if applied:
+            logger.info("[SYNC] Applied {} peer organic scores to leaderboard", applied)
 
     # ------------------------------------------------------------------
     # Validation round
@@ -322,6 +440,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         # 5. Score all responses (under lock, in thread pool to not block event loop)
         if valid_responses:
             try:
+                self._is_challenge_scoring = True
                 async with self._scoring_lock:
                     loop = asyncio.get_event_loop()
                     rewards = await loop.run_in_executor(
@@ -333,6 +452,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
             except Exception as exc:
                 logger.error(f"Scoring failed: {exc}")
                 rewards = [0.0] * len(valid_responses)
+            finally:
+                self._is_challenge_scoring = False
 
             # 6. Update leaderboard
             for uid, reward in zip(valid_uids, rewards):
@@ -493,6 +614,28 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         Returns a list of dicts sorted by EMA score descending.
         """
+        self._organic_active_count += 1
+        try:
+            return await self._run_organic_generation_inner(
+                prompt=prompt, genre=genre, mood=mood, tempo_bpm=tempo_bpm,
+                duration_seconds=duration_seconds, key_signature=key_signature,
+                instruments=instruments, request_id=request_id,
+            )
+        finally:
+            self._organic_active_count -= 1
+
+    async def _run_organic_generation_inner(
+        self,
+        prompt: str,
+        genre: str = "",
+        mood: str = "",
+        tempo_bpm: int = 120,
+        duration_seconds: float = 15.0,
+        key_signature: str | None = None,
+        instruments: list[str] | None = None,
+        request_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Inner implementation of organic generation (counter managed by caller)."""
         # Build synapse — intentionally omit is_organic so miners
         # cannot distinguish organic from challenge requests (anti-gaming)
         synapse = MusicGenerationSynapse(
@@ -649,6 +792,34 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 request_id,
                 ", ".join(f"UID {u}={r:.4f}" for u, r in zip(uids, rewards)),
             )
+
+            # Forward organic scores to platform API for cross-validator sync
+            if self._api_client is not None:
+                try:
+                    validator_hotkey = ""
+                    try:
+                        validator_hotkey = self.wallet.hotkey.ss58_address
+                    except Exception:
+                        pass
+                    score_payload = {
+                        "request_id": request_id,
+                        "source_validator_hotkey": validator_hotkey,
+                        "scores": [
+                            {
+                                "miner_uid": uid,
+                                "miner_hotkey": hotkey,
+                                "score": float(reward),
+                            }
+                            for uid, hotkey, reward in zip(uids, hotkeys, rewards)
+                        ],
+                    }
+                    score_resp = await self._api_client.post(
+                        "/api/v1/validator/organic-scores", json=score_payload,
+                    )
+                    if score_resp.status_code not in (200, 201, 404):
+                        score_resp.raise_for_status()
+                except Exception as exc:
+                    logger.debug("[ORGANIC] Failed to forward organic scores: {}", exc)
 
             # Submit organic results as a validation round for annotation/preference training
             if self._api_client is not None and organic_meta and len(responses) >= 2:

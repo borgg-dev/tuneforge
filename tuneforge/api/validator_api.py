@@ -122,6 +122,15 @@ def create_validator_api(validator: "TuneForgeValidator") -> FastAPI:
             "current_round": validator.current_round,
         }
 
+    @app.get("/status")
+    async def status():
+        """Detailed validator status for load-aware routing.
+
+        Used by the platform load balancer to pick the least-loaded
+        validator for organic requests.
+        """
+        return validator.status()
+
     @app.post("/organic/generate", response_model=OrganicGenerateResponse)
     async def organic_generate(request: OrganicGenerateRequest) -> OrganicGenerateResponse:
         """Fan out to all miners, score, return top N."""

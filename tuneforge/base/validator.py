@@ -296,6 +296,10 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         # Run the validation loop
         tasks.append(asyncio.create_task(self._validation_loop()))
 
+        # Start organic score sync (pulls peer scores from platform API)
+        if hasattr(self, "run_organic_score_sync"):
+            tasks.append(asyncio.create_task(self.run_organic_score_sync()))
+
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
