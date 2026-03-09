@@ -73,6 +73,10 @@ class TuneForgeMiner(BaseMinerNeuron):
         self._error_timestamps: list[float] = []
         self._generation_times: list[float] = []
 
+        # Preload model so first challenge doesn't timeout on download/load
+        logger.info(f"Preloading {backend} model...")
+        self._model_manager.preload()
+
         logger.info(
             f"TuneForgeMiner initialized: backend={backend}, "
             f"model_size={model_size}, device={self.settings.gpu_device}"

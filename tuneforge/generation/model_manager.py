@@ -54,6 +54,16 @@ class ModelManager:
             f"model_size={model_size}, device={device}"
         )
 
+    def preload(self) -> None:
+        """Preload the active backend model into memory.
+
+        Called at startup so the first challenge doesn't timeout
+        waiting for model download/load.
+        """
+        backend = self._get_or_create_backend(self._active_backend_name)
+        backend.load()
+        logger.info(f"Backend '{self._active_backend_name}' preloaded and ready")
+
     @property
     def active_backend(self) -> str:
         """Name of the currently active backend."""
