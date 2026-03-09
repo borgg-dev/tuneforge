@@ -9,7 +9,7 @@ Extends BaseNeuron with validator-specific functionality:
 """
 
 import asyncio
-import random
+import hashlib
 import time
 from abc import abstractmethod
 from typing import Any
@@ -337,8 +337,79 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
             logger.error("Failed to create organic API server: {}", exc)
             return None
 
+    def _compute_stagger_offset(self) -> float:
+        """Compute deterministic challenge stagger offset for this validator.
+
+        Spreads validators evenly across the validation interval based on
+        metagraph position, so challenge rounds from different validators
+        never overlap and cause miner queue congestion / timeouts.
+        """
+        try:
+            validator_uids = sorted(self.get_validator_uids())
+            if not validator_uids or self.uid not in validator_uids:
+                return 0.0
+
+            position = validator_uids.index(self.uid)
+            n_validators = len(validator_uids)
+            base_interval = self.settings.validation_interval
+            offset = (position / n_validators) * base_interval
+
+            logger.info(
+                f"Challenge stagger: validator {self.uid} at position "
+                f"{position}/{n_validators}, offset {offset:.0f}s "
+                f"within {base_interval}s cycle"
+            )
+            return offset
+        except Exception as exc:
+            logger.warning(f"Failed to compute stagger offset, using 0: {exc}")
+            return 0.0
+
+    def _compute_cycle_jitter(self, cycle_number: int) -> float:
+        """Compute small deterministic per-cycle jitter for anti-gaming.
+
+        Uses validator hotkey + cycle number to produce a consistent ±5s
+        jitter.  Small enough to never cause overlap between stagger slots
+        (minimum slot gap is interval/N, typically 60-200s) but enough to
+        prevent miners from predicting exact challenge timing.
+        """
+        try:
+            hotkey = self.wallet.hotkey.ss58_address
+            h = hashlib.sha256(f"{hotkey}:{cycle_number}".encode())
+            # Map hash to [-0.5, +0.5) then scale to ±5 seconds
+            frac = (int.from_bytes(h.digest()[:4], "big") / 0xFFFFFFFF) - 0.5
+            return frac * 10.0  # ±5s
+        except Exception:
+            return 0.0
+
     async def _validation_loop(self) -> None:
-        """Async validation loop — runs rounds with async sleep between them."""
+        """Async validation loop with epoch-aligned challenge staggering.
+
+        Instead of random jitter, validators compute a deterministic offset
+        within each cycle based on their metagraph position.  This guarantees
+        that validators fire challenges at evenly-spaced times, completely
+        eliminating miner queue congestion from concurrent challenge rounds.
+
+        With N validators on a 600s cycle, challenges arrive ~600/N seconds
+        apart — well within a miner's ability to complete one generation
+        (30-60s) before the next arrives.
+        """
+        base_interval = self.settings.validation_interval
+        stagger_offset = self._compute_stagger_offset()
+
+        # Wait for our first slot (epoch-aligned)
+        now = time.time()
+        cycle_number = int(now / base_interval)
+        first_target = cycle_number * base_interval + stagger_offset
+        if first_target <= now:
+            first_target += base_interval
+        initial_wait = first_target - now
+
+        logger.info(
+            f"Challenge stagger: waiting {initial_wait:.0f}s for first "
+            f"slot (offset {stagger_offset:.0f}s in {base_interval}s cycle)"
+        )
+        await self._async_wait(initial_wait)
+
         loop = asyncio.get_event_loop()
         while self.is_running and not self.should_exit:
             try:
@@ -352,14 +423,21 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                 await loop.run_in_executor(None, self.log_status)
                 self.step += 1
 
-                # Async sleep with ±30% jitter so miners cannot predict
-                # challenge timing and differentiate from organic requests
-                elapsed = time.time() - self.round_start_time
-                base_interval = self.settings.validation_interval
-                jitter = base_interval * random.uniform(-0.3, 0.3)
-                remaining = (base_interval + jitter) - elapsed
+                # Recompute stagger offset (validator set may change)
+                stagger_offset = self._compute_stagger_offset()
+
+                # Find next epoch-aligned slot for this validator
+                now = time.time()
+                cycle_number = int(now / base_interval)
+                jitter = self._compute_cycle_jitter(cycle_number + 1)
+                target = (cycle_number + 1) * base_interval + stagger_offset + jitter
+                # If round took so long we missed the next slot, skip ahead
+                if target <= now:
+                    target += base_interval
+                remaining = target - now
+
                 if remaining > 0:
-                    logger.info(f"Waiting {remaining:.0f}s until next round…")
+                    logger.info(f"Waiting {remaining:.0f}s until next stagger slot…")
                     await self._async_wait(remaining)
 
             except asyncio.CancelledError:

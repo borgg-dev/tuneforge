@@ -185,14 +185,19 @@ class BaseNeuron(ABC):
         self.last_sync_block = self.block
         logger.info(f"Synced at block {self.last_sync_block}")
 
-    def resync_metagraph(self) -> None:
-        """Force metagraph resync from chain."""
+    def resync_metagraph(self) -> bool:
+        """Force metagraph resync from chain.
+
+        Returns True on success, False on failure (stale data retained).
+        """
         logger.debug("Resyncing metagraph…")
         try:
             self._metagraph = self.settings.sync_metagraph()
             self._uid = self.settings.get_uid()
+            return True
         except Exception as exc:
-            logger.error(f"Metagraph resync failed: {exc}")
+            logger.error(f"Metagraph resync failed (using stale data): {exc}")
+            return False
 
     # ------------------------------------------------------------------
     # UID helpers

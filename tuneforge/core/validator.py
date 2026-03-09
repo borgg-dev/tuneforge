@@ -80,7 +80,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._is_challenge_scoring: bool = False
         self._start_time: float = time.time()
         self._last_organic_score_sync: float = 0.0
-        self._seen_organic_ids: set[str] = set()  # dedup peer organic scores
+        self._seen_organic_ids: dict[str, None] = {}  # ordered dedup (insertion-order dict)
         self._seen_organic_ids_max = 10_000
 
         logger.info("TuneForgeValidator initialised")
@@ -208,7 +208,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         applied = 0
         for entry in scores:
             score_id = entry.get("id", "")
-            if score_id in self._seen_organic_ids:
+            if score_id in self._seen_organic_ids:  # O(1) dict lookup
                 continue
 
             miner_uid = entry.get("miner_uid")
@@ -226,15 +226,15 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 continue
 
             self._leaderboard.update(miner_uid, float(score_val))
-            self._seen_organic_ids.add(score_id)
+            self._seen_organic_ids[score_id] = None  # insertion-ordered dict
             applied += 1
 
-        # Prune dedup set
+        # Prune dedup dict — evict oldest entries (FIFO via insertion order)
         if len(self._seen_organic_ids) > self._seen_organic_ids_max:
-            # Keep the most recent half
             excess = len(self._seen_organic_ids) - self._seen_organic_ids_max // 2
-            for _ in range(excess):
-                self._seen_organic_ids.pop()
+            keys_to_remove = list(self._seen_organic_ids.keys())[:excess]
+            for k in keys_to_remove:
+                del self._seen_organic_ids[k]
 
         self._last_organic_score_sync = time.time()
         if applied:
@@ -255,7 +255,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
         # Run in executor — this is a synchronous chain call that would
         # block the event loop and freeze the organic API server.
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.resync_metagraph)
+        synced = await loop.run_in_executor(None, self.resync_metagraph)
+        if not synced:
+            logger.warning("Metagraph resync failed — using stale data for round {}", self.current_round)
 
         # Check for UID recycling (hotkey changes) and reset EMA for new miners
         uid_to_hotkey = {
@@ -624,6 +626,11 @@ class TuneForgeValidator(BaseValidatorNeuron):
         finally:
             self._organic_active_count -= 1
 
+    # Maximum age (seconds) of metagraph data for organic requests.
+    # Challenge rounds resync every ~600s; organic requests tolerate
+    # slightly stale data but 60s keeps miner availability fresh.
+    _ORGANIC_METAGRAPH_MAX_AGE: float = 60.0
+
     async def _run_organic_generation_inner(
         self,
         prompt: str,
@@ -636,6 +643,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
         request_id: str = "",
     ) -> list[dict[str, Any]]:
         """Inner implementation of organic generation (counter managed by caller)."""
+        # Ensure metagraph is reasonably fresh for miner selection
+        if (time.time() - self.settings._metagraph_last_sync) > self._ORGANIC_METAGRAPH_MAX_AGE:
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.resync_metagraph)
+            except Exception as exc:
+                logger.warning("[ORGANIC] Metagraph resync failed, using cached: {}", exc)
+
         # Build synapse — intentionally omit is_organic so miners
         # cannot distinguish organic from challenge requests (anti-gaming)
         synapse = MusicGenerationSynapse(
@@ -700,15 +715,18 @@ class TuneForgeValidator(BaseValidatorNeuron):
         if not valid_responses:
             return []
 
-        # Lightweight scoring — 5 key scorers instead of full 18 for fast organic response
+        # Lightweight scoring — 5 key scorers instead of full 18 for fast organic response.
+        # Must hold _scoring_lock to prevent concurrent access to shared GPU model
+        # state (CLAP embeddings, MERT, etc.) from challenge scoring.
         try:
-            loop = asyncio.get_event_loop()
-            rewards = await loop.run_in_executor(
-                self._scoring_executor,
-                self._reward_model.score_batch_organic,
-                valid_responses,
-                valid_hotkeys,
-            )
+            async with self._scoring_lock:
+                loop = asyncio.get_event_loop()
+                rewards = await loop.run_in_executor(
+                    self._scoring_executor,
+                    self._reward_model.score_batch_organic,
+                    valid_responses,
+                    valid_hotkeys,
+                )
         except Exception as exc:
             logger.error("[ORGANIC] Scoring failed: {}", exc)
             rewards = [0.0] * len(valid_responses)
@@ -774,13 +792,14 @@ class TuneForgeValidator(BaseValidatorNeuron):
         for A/B annotation and preference model training.
         """
         try:
-            loop = asyncio.get_event_loop()
-            rewards = await loop.run_in_executor(
-                self._scoring_executor,
-                self._reward_model.score_batch,
-                responses,
-                hotkeys,
-            )
+            async with self._scoring_lock:
+                loop = asyncio.get_event_loop()
+                rewards = await loop.run_in_executor(
+                    self._scoring_executor,
+                    self._reward_model.score_batch,
+                    responses,
+                    hotkeys,
+                )
 
             # Update leaderboard and scores with full-pipeline results
             for uid, reward in zip(uids, rewards):

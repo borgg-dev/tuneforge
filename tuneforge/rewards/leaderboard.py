@@ -113,6 +113,17 @@ class MinerLeaderboard:
                         f"EMA reset from {old_ema:.4f} to 0.0"
                     )
                 self._hotkeys[uid] = hotkey
+
+            # Prune stale entries for UIDs no longer in the metagraph
+            current_uids = set(uid_to_hotkey.keys())
+            stale_uids = [u for u in self._ema if u not in current_uids]
+            for uid in stale_uids:
+                self._ema.pop(uid, None)
+                self._rounds.pop(uid, None)
+                self._hotkeys.pop(uid, None)
+            if stale_uids:
+                logger.info(f"Pruned {len(stale_uids)} stale UIDs from leaderboard: {stale_uids}")
+
         return reset_uids
 
     def get_weight(self, uid: int) -> float:
