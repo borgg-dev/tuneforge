@@ -2,7 +2,7 @@
 
 This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns TAO rewards based on quality scores.
 
-**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Medium and ACE-Step 1.5 are provided as baseline starting models, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
+**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Large and Stable Audio Open 1.0 are provided as baseline starting models, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
 
 ---
 
@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen, ACE-Step 1.5, Stable Audio, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns TAO rewards proportional to quality scores assigned by validators.
 - Handles organic queries from the SaaS API. These do not affect scoring. Organic queries are prioritized over validation challenges (`organic_boost = 1,000,000`).
@@ -35,11 +35,11 @@ Minimum hardware specifications (from `min_compute.yml`):
 
 | Model | `TF_MODEL_NAME` | VRAM | Sample Rate |
 |-------|-----------------|------|-------------|
-| **ACE-Step 1.5** (default) | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
+| **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
+| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | 32 kHz mono |
-| MusicGen Large | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
-| Stable Audio | `stable_audio` | ~6 GB | 44.1 kHz |
+| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
 
 These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more TAO.
 
@@ -64,9 +64,9 @@ source venv/bin/activate
 pip install -e .
 ```
 
-### ACE-Step 1.5 Setup (Default Baseline)
+### ACE-Step 1.5 Setup (Alternative Baseline)
 
-ACE-Step 1.5 is the default baseline model. It uses a diffusion-based architecture to produce 48kHz stereo audio. It requires its own repository to be cloned alongside tuneforge.
+ACE-Step 1.5 is an alternative baseline model. It uses a diffusion-based architecture to produce 48kHz stereo audio. It requires its own repository to be cloned alongside tuneforge.
 
 ```bash
 # Clone the ACE-Step repo (from the tuneforge parent directory)
@@ -86,9 +86,9 @@ export ACESTEP_PATH=/path/to/ACE-Step-1.5
 
 On first startup, the miner will automatically download the model checkpoints from HuggingFace (~9.5 GB total: DiT model, VAE, text encoder, language model). This happens once and the files are cached in the `ACE-Step-1.5/checkpoints/` directory.
 
-### MusicGen Setup (Alternative Baseline)
+### MusicGen Setup (Default Baseline)
 
-MusicGen is an alternative baseline model. Install audiocraft separately because it pins specific torch versions:
+MusicGen Large is the default baseline model (~16GB VRAM, 3.3B parameters). For GPUs with less than 16GB VRAM, use `facebook/musicgen-medium` instead. Install audiocraft separately because it pins specific torch versions:
 
 ```bash
 pip install audiocraft --no-deps
@@ -96,7 +96,15 @@ pip install audiocraft --no-deps
 
 Model weights are downloaded automatically from HuggingFace on first run.
 
-Model weights are downloaded automatically from HuggingFace on first run.
+### Stable Audio Open 1.0 Setup (Alternative Baseline)
+
+Stable Audio Open 1.0 is the recommended alternative baseline (~6GB VRAM, 44.1kHz stereo output). It uses a diffusion-based architecture and requires the `diffusers` library:
+
+```bash
+pip install diffusers
+```
+
+Model weights are downloaded automatically from HuggingFace on first run. Set `TF_MODEL_NAME=stable_audio` and `TF_GENERATION_SAMPLE_RATE=44100` in your `.env.miner` file.
 
 ### Bringing Your Own Model
 
@@ -133,7 +141,7 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 | `TF_NEURON_EPOCH_LENGTH` | int | `100` | Blocks between epochs |
 | `TF_NEURON_TIMEOUT` | int | `120` | Forward timeout in seconds |
 | `TF_AXON_PORT` | int | None | Axon serving port |
-| `TF_MODEL_NAME` | str | `ace-step-1.5` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
+| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum audio duration in seconds |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Generation timeout in seconds |
@@ -149,17 +157,17 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 
 Note: Scoring weights are hardcoded on the validator side and are not configurable via environment variables. This ensures consensus across all validators.
 
-### Minimal Example (ACE-Step)
+### Minimal Example (MusicGen Large)
 
 ```bash
 TF_NETUID=234
 TF_SUBTENSOR_NETWORK=test
 TF_WALLET_NAME=my_wallet
 TF_WALLET_HOTKEY=my_hotkey
-TF_MODEL_NAME=ace-step-1.5
+TF_MODEL_NAME=facebook/musicgen-large
 TF_GPU_DEVICE=cuda:0
 TF_AXON_PORT=8091
-TF_GENERATION_SAMPLE_RATE=48000
+TF_GENERATION_SAMPLE_RATE=32000
 ```
 
 ### Minimal Example (MusicGen)
@@ -169,7 +177,7 @@ TF_NETUID=234
 TF_SUBTENSOR_NETWORK=test
 TF_WALLET_NAME=my_wallet
 TF_WALLET_HOTKEY=my_hotkey
-TF_MODEL_NAME=facebook/musicgen-medium
+TF_MODEL_NAME=facebook/musicgen-large
 TF_GPU_DEVICE=cuda:0
 TF_AXON_PORT=8091
 TF_GENERATION_SAMPLE_RATE=32000
@@ -215,11 +223,11 @@ The provided models are baselines to get you started. The real opportunity on Tu
 
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
-| **ACE-Step 1.5** | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | **Default baseline.** Diffusion-based, stereo output |
-| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Moderate | 32 kHz mono | Autoregressive transformer |
+| **MusicGen Large** | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer (3.3B params) |
+| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
-| MusicGen Large | `facebook/musicgen-large` | ~16 GB | Slower | 32 kHz mono | Higher quality than MusicGen Medium |
-| Stable Audio | `stable_audio` | ~6 GB | Moderate | 44.1 kHz | Different sonic aesthetic |
+| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Requires separate repo clone |
 
 ### Custom Models
 
@@ -236,11 +244,15 @@ Speed accounts for only 2% of the total score. Quality and adherence signals col
 Set the model in your `.env.miner` file:
 
 ```bash
-# ACE-Step 1.5 (default baseline)
-TF_MODEL_NAME=ace-step-1.5
-TF_GENERATION_SAMPLE_RATE=48000
+# MusicGen Large (default baseline, ~16GB VRAM)
+TF_MODEL_NAME=facebook/musicgen-large
+TF_GENERATION_SAMPLE_RATE=32000
 
-# Or MusicGen Medium (alternative baseline)
+# Or Stable Audio Open 1.0 (alternative baseline, ~6GB VRAM)
+TF_MODEL_NAME=stable_audio
+TF_GENERATION_SAMPLE_RATE=44100
+
+# Or MusicGen Medium (for GPUs with <16GB VRAM)
 TF_MODEL_NAME=facebook/musicgen-medium
 TF_GENERATION_SAMPLE_RATE=32000
 ```
@@ -412,7 +424,7 @@ TF_WANDB_ENABLED=true
 
 ### CUDA Out of Memory
 
-ACE-Step 1.5 requires ~6 GB VRAM. If you run out of memory, ensure no other processes are using the GPU. For very low-VRAM GPUs, fall back to MusicGen Small:
+MusicGen Large requires ~16 GB VRAM. If you run out of memory, try Stable Audio Open (~6GB) or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small

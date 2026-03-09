@@ -213,7 +213,7 @@ class ModelManager:
             info["gpu_model"] = torch.cuda.get_device_name(device_idx)
             info["memory_allocated_mb"] = torch.cuda.memory_allocated(device_idx) / (1024 ** 2)
             info["memory_reserved_mb"] = torch.cuda.memory_reserved(device_idx) / (1024 ** 2)
-            total = torch.cuda.get_device_properties(device_idx).total_mem
+            total = torch.cuda.get_device_properties(device_idx).total_memory
             info["memory_total_mb"] = total / (1024 ** 2)
 
             if total > 0:

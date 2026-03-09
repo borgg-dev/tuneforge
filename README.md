@@ -14,7 +14,7 @@
 
 ---
 
-TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **16 weighted quality scorers** and **4 penalty multipliers**. The subnet ships with MusicGen (default) and ACE-Step 1.5 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
+TuneForge is a Bittensor subnet that incentivizes decentralized AI music generation. Miners compete to produce high-quality audio from text prompts, scored by validators across **16 weighted quality scorers** and **4 penalty multipliers**. The subnet ships with MusicGen Large (default) and Stable Audio Open 1.0 as baseline starting models, but miners are encouraged to bring their own models, fine-tune existing ones, or integrate any text-to-music generation system. The scoring is model-agnostic -- it evaluates audio quality, not architecture. An EMA-based leaderboard translates performance into on-chain weight and TAO emissions.
 
 **Testnet netuid: 234** | **Mainnet: TBD**
 
@@ -45,8 +45,8 @@ graph TB
     end
 
     subgraph Miners
-        M1[Miner 1<br/>ACE-Step]
-        M2[Miner 2<br/>MusicGen/Stable Audio]
+        M1[Miner 1<br/>MusicGen Large]
+        M2[Miner 2<br/>Stable Audio/Custom]
         M3[Miner N<br/>Custom Model]
     end
 
@@ -77,7 +77,7 @@ graph TB
 
 **Validators** generate text-to-music challenges, distribute them to miners via dendrite, score the returned audio across 16 quality signals with 4 penalty multipliers, apply multi-scale evaluation and genre-aware adjustments, maintain an EMA leaderboard with tiered power-law weighting, and submit weights on-chain.
 
-**Miners** run a generation backend (MusicGen, ACE-Step 1.5, Stable Audio, or any custom model), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO. The baseline models are starting points -- miners who innovate with better models earn higher scores.
+**Miners** run a generation backend (MusicGen Large, Stable Audio Open, or any custom model), receive challenges via axon, and return generated audio. Higher-quality, faster generation earns more weight and TAO. The baseline models are starting points -- miners who innovate with better models earn higher scores.
 
 **Organic Generation** (optional) allows real user requests from the SaaS backend to flow through the validator. The validator fans out organic prompts to the top 10 miners by EMA, scores all responses with the same pipeline, updates the EMA leaderboard, and returns the best results to the customer. Organic and challenge scoring coexist on the same event loop and feed the same EMA.
 
@@ -347,7 +347,7 @@ All configuration is done through environment variables with the `TF_` prefix. V
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_MODEL_NAME` | str | ace-step-1.5 | Music generation model (see [Model Selection](docs/miner_setup.md#model-selection-guide)) |
+| `TF_MODEL_NAME` | str | facebook/musicgen-large | Music generation model (see [Model Selection](docs/miner_setup.md#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | 30 | Max generation duration (s) |
 | `TF_GENERATION_SAMPLE_RATE` | int | 32000 | Audio sample rate (Hz) |
 | `TF_GENERATION_TIMEOUT` | int | 120 | Generation timeout (s) |
@@ -458,8 +458,8 @@ tuneforge/
 │   │   └── validator.py           -- TuneForgeValidator implementation
 │   ├── generation/
 │   │   ├── model_manager.py       -- Backend manager (lazy loading, GPU monitoring)
-│   │   ├── musicgen_backend.py    -- MusicGen generation backend
-│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend (default)
+│   │   ├── musicgen_backend.py    -- MusicGen generation backend (default)
+│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend
 │   │   ├── stable_audio_backend.py -- Stable Audio backend
 │   │   ├── audio_utils.py         -- Audio normalization, encoding, fades
 │   │   └── prompt_parser.py       -- Natural language prompt builder
@@ -517,7 +517,7 @@ tuneforge/
 
 - **Mainnet deployment** -- currently running on testnet (netuid 234); mainnet launch pending stability milestones
 - **Preference model maturation** -- the crowd annotation pipeline is live; as more annotations accumulate, the preference model weight auto-scales from 2% toward 20%, progressively shifting scoring toward human-validated quality
-- **Additional generation backends** -- MusicGen and ACE-Step 1.5 serve as baselines; miners are encouraged to integrate new models as they emerge
+- **Additional generation backends** -- MusicGen Large and Stable Audio Open 1.0 serve as baselines; miners are encouraged to integrate new models as they emerge
 - **Vocal generation support** -- the scoring pipeline includes vocal quality (4%) and vocal/lyrics (8%) scorers; dedicated vocal generation backends are planned
 - **Progressive difficulty** -- the progressive difficulty system scales challenge complexity as network quality improves, pushing miners toward longer and higher-quality generations over time
 

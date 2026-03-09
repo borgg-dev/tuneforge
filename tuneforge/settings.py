@@ -66,8 +66,8 @@ class Settings(BaseSettings):
 
     # Music generation configuration
     model_name: str = Field(
-        default="ace-step-1.5",
-        description="Music generation model (ace-step-1.5, facebook/musicgen-medium, etc.)"
+        default="facebook/musicgen-large",
+        description="Music generation model (facebook/musicgen-large, stable_audio, ace-step-1.5, etc.)"
     )
     generation_max_duration: int = Field(
         default=30,

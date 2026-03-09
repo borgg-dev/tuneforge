@@ -40,7 +40,7 @@ def load_env_or_exit(role: str) -> Path:
         sys.stderr.write(f"Copy .env.{role}.example to .env.{role} and configure it.\n")
         sys.exit(1)
     if env_file.exists():
-        load_dotenv(env_file)
+        load_dotenv(env_file, override=True)
     else:
         sys.stderr.write(f"ERROR: Config file not found: {env_file}\n")
         sys.exit(1)

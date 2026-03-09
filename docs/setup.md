@@ -494,7 +494,7 @@ docker compose down
 
 Environment files are loaded via `env_file` directives: `.env.miner` for the miner and api services, `.env.validator` for the validator service.
 
-The miner Dockerfile pre-downloads the ACE-Step 1.5 model at build time. The validator Dockerfile pre-downloads the `laion/larger_clap_music` CLAP model. This avoids download delays at first startup.
+The miner Dockerfile pre-downloads the MusicGen Large model at build time. The validator Dockerfile pre-downloads the `laion/larger_clap_music` CLAP model. This avoids download delays at first startup.
 
 ---
 
@@ -578,7 +578,7 @@ The environment variables below control only **operational** parameters.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_MODEL_NAME` | str | `ace-step-1.5` | Music generation model name or path |
+| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Music generation model name or path |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum generation duration (seconds) |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Miner-side timeout for generation requests (seconds) |
