@@ -130,13 +130,17 @@ class StableAudioBackend:
             )
 
             # Output is a StableAudioPipelineOutput with .audios
-            audio_np = output.audios[0]
+            audio = output.audios[0]
+
+            # Convert to numpy if still a torch tensor
+            if isinstance(audio, torch.Tensor):
+                audio = audio.cpu().numpy()
 
             # May be (channels, samples) — flatten to mono
-            if audio_np.ndim > 1:
-                audio_np = audio_np.mean(axis=0)
+            if audio.ndim > 1:
+                audio = audio.mean(axis=0)
 
-            audio_np = audio_np.astype(np.float32)
+            audio_np = audio.astype(np.float32)
             peak = np.max(np.abs(audio_np))
             if peak > 1.0:
                 audio_np = audio_np / peak

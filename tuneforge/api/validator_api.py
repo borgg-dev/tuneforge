@@ -125,7 +125,7 @@ def create_validator_api(validator: "TuneForgeValidator") -> FastAPI:
         }
 
     @app.get("/status")
-    async def status():
+    async def get_status():
         """Detailed validator status for load-aware routing.
 
         Used by the platform load balancer to pick the least-loaded
