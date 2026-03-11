@@ -601,7 +601,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
     # Shorter dendrite timeout for organic — don't let slow miners hold
     # up the customer.  Good miners respond in 5-15s.
-    ORGANIC_TIMEOUT: float = 90.0
+    ORGANIC_TIMEOUT: float = 60.0
 
     async def run_organic_generation(
         self,
