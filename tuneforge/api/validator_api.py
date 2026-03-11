@@ -67,6 +67,8 @@ class OrganicGenerateResponse(BaseModel):
     total_miners_queried: int
     total_valid_responses: int
     total_time_ms: int
+    variations_requested: int = 1
+    variations_delivered: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +215,8 @@ def create_validator_api(validator: "TuneForgeValidator") -> FastAPI:
             total_miners_queried=ranked_results[0]["total_queried"] if ranked_results else 0,
             total_valid_responses=ranked_results[0]["total_valid"] if ranked_results else 0,
             total_time_ms=total_ms,
+            variations_requested=request.num_variations,
+            variations_delivered=len(tracks),
         )
 
     return app

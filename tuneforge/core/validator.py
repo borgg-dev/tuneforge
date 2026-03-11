@@ -21,7 +21,7 @@ import numpy as np
 from loguru import logger
 
 from tuneforge.base.dendrite import DendriteResponseEvent
-from tuneforge.base.protocol import MusicGenerationSynapse
+from tuneforge.base.protocol import MusicGenerationSynapse, PingSynapse
 from tuneforge.base.validator import BaseValidatorNeuron
 from tuneforge.config.scoring_config import EMA_STATE_PATH, EMA_SAVE_INTERVAL
 from tuneforge.rewards.leaderboard import MinerLeaderboard
@@ -603,6 +603,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
     # up the customer.  Good miners respond in 5-15s.
     ORGANIC_TIMEOUT: float = 60.0
 
+    # Quick ping before organic generation to filter out dead miners.
+    ORGANIC_PING_TIMEOUT: float = 3.0
+
     async def run_organic_generation(
         self,
         prompt: str,
@@ -678,15 +681,37 @@ class TuneForgeValidator(BaseValidatorNeuron):
             logger.warning("[ORGANIC] No serving miners available")
             return []
 
+        # Quick health check — ping all candidates, keep only those alive
+        candidate_axons = [self.metagraph.axons[uid] for uid in miner_uids]
+        try:
+            ping_responses = await self.dendrite.forward(
+                axons=candidate_axons,
+                synapse=PingSynapse(),
+                timeout=self.ORGANIC_PING_TIMEOUT,
+                deserialize=False,
+            )
+            alive_uids = [
+                uid for uid, pr in zip(miner_uids, ping_responses)
+                if pr is not None and getattr(pr, "is_available", False)
+            ]
+        except Exception as exc:
+            logger.warning("[ORGANIC] Ping health check failed ({}), using all candidates", exc)
+            alive_uids = miner_uids
+
+        if not alive_uids:
+            logger.warning("[ORGANIC] No miners responded to ping — trying all candidates anyway")
+            alive_uids = miner_uids
+
         logger.info(
-            "[ORGANIC] Querying top {} miners (of {} serving) for request {}",
+            "[ORGANIC] Querying {} alive miners (of {} candidates, {} serving) for request {}",
+            len(alive_uids),
             len(miner_uids),
             len(self._get_serving_miners()),
             request_id,
         )
 
-        # Fan out to all miners — wait for all responses (or timeout)
-        axons = [self.metagraph.axons[uid] for uid in miner_uids]
+        # Fan out to alive miners only
+        axons = [self.metagraph.axons[uid] for uid in alive_uids]
         try:
             responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
                 axons=axons,
@@ -703,7 +728,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         valid_uids: list[int] = []
         valid_hotkeys: list[str] = []
 
-        for uid, resp in zip(miner_uids, responses):
+        for uid, resp in zip(alive_uids, responses):
             if resp is None:
                 continue
             if resp.audio_b64 is None:
@@ -717,7 +742,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         logger.info(
             "[ORGANIC] Got {}/{} valid responses for request {}",
-            len(valid_responses), len(miner_uids), request_id,
+            len(valid_responses), len(alive_uids), request_id,
         )
 
         if not valid_responses:
@@ -753,7 +778,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 "generation_time_ms": resp.generation_time_ms or 0,
                 "model_id": resp.model_id,
                 "composite_score": round(score, 4),
-                "total_queried": len(miner_uids),
+                "total_queried": len(alive_uids),
                 "total_valid": len(valid_responses),
             })
 
