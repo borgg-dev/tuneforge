@@ -62,7 +62,7 @@ async def generate(request: GenerateRequest) -> GenerateResponse:
     if app_state.organic_router is not None:
         for _ in range(request.num_variations):
             audio_bytes, metadata = await app_state.organic_router.generate(
-                synapse, timeout=settings.generation_timeout
+                synapse, timeout=settings.generation_timeout,
             )
             if audio_bytes is None:
                 continue
