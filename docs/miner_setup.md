@@ -117,6 +117,12 @@ huggingface-cli login
 
 Once authenticated, model weights are downloaded automatically on first run. Set `TF_MODEL_NAME=stable_audio` and `TF_GENERATION_SAMPLE_RATE=44100` in your `.env.miner` file.
 
+Alternatively, you can set the `HF_TOKEN` environment variable in your `.env.miner` file instead of using `huggingface-cli login`:
+
+```bash
+HF_TOKEN=hf_your_token_here
+```
+
 ### Bringing Your Own Model
 
 TuneForge is designed to be model-agnostic. If you have a custom music generation model, you can integrate it by implementing a backend class that follows the same interface as the existing backends in `tuneforge/generation/`. Your model just needs to accept a text prompt and duration, and return an audio array with a sample rate.
@@ -142,6 +148,7 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `HF_TOKEN` | str | None | HuggingFace access token (required for gated models like Stable Audio) |
 | `TF_NETUID` | int | `0` | Subnet UID (234 on testnet) |
 | `TF_SUBTENSOR_NETWORK` | str | None | Network: `finney`, `test`, or `local` |
 | `TF_SUBTENSOR_CHAIN_ENDPOINT` | str | None | Custom chain endpoint URL |
@@ -452,6 +459,16 @@ MusicGen models are downloaded automatically from HuggingFace on first startup. 
 
 ```bash
 bash scripts/download_models.sh
+```
+
+For **Stable Audio** (gated model), a 401 error means authentication is missing. Ensure you have:
+1. Accepted the license at https://huggingface.co/stabilityai/stable-audio-open-1.0
+2. Set `HF_TOKEN` in your `.env.miner` file, or logged in via `huggingface-cli login`
+
+You can pre-download the model before starting the miner to avoid PM2 restart issues during large downloads:
+
+```bash
+HF_TOKEN=hf_your_token python3 -c "from huggingface_hub import snapshot_download; snapshot_download('stabilityai/stable-audio-open-1.0')"
 ```
 
 For ACE-Step, verify the repo is cloned at `~/ACE-Step-1.5` and try:

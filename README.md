@@ -347,6 +347,7 @@ All configuration is done through environment variables with the `TF_` prefix. V
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `HF_TOKEN` | str | None | HuggingFace access token (required for gated models like Stable Audio) |
 | `TF_MODEL_NAME` | str | facebook/musicgen-large | Music generation model (see [Model Selection](docs/miner_setup.md#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | 30 | Max generation duration (s) |
 | `TF_GENERATION_SAMPLE_RATE` | int | 32000 | Audio sample rate (Hz) |
