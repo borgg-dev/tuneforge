@@ -20,6 +20,10 @@
   better models, fine-tune aggressively, or build something entirely new.</p>
 
   <p><strong>Testnet netuid: 234</strong> · <strong>Mainnet: TBD</strong></p>
+
+  <p>
+    <a href="docs/validator_setup.md"><strong>Run a Validator Node</strong></a> · <a href="docs/miner_setup.md"><strong>Run a Miner Node</strong></a>
+  </p>
 </div>
 
 ---
