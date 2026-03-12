@@ -529,9 +529,10 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
 
                         remaining_rounds = MAX_ROUNDS_PER_EPOCH - round_index - 1
                         if remaining_rounds > 0:
-                            next_round = self._seconds_until_next_epoch(round_interval)
+                            next_round_start = epoch_start + sync_duration + (round_index + 1) * round_interval
+                            secs_until = max(0, next_round_start - int(time.time()))
                             logger.info(
-                                f"Next round in ~{next_round}s "
+                                f"Next round in ~{secs_until}s "
                                 f"({remaining_rounds} rounds left in epoch)..."
                             )
                         else:
