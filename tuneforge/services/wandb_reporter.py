@@ -53,6 +53,7 @@ class WandbReporter:
         self.wallet = wallet
         self.netuid = netuid
         self._initialized = False
+        self._run_id: Optional[str] = None
         self._step = 0
         self._lock = threading.Lock()
 
@@ -63,19 +64,40 @@ class WandbReporter:
             self._initialize()
 
     def _initialize(self) -> bool:
-        if self._initialized:
+        """Initialize or resume W&B run.
+
+        Uses ``resume="allow"`` with a deterministic run ID so the same
+        validator process always appends to the same W&B run — even if
+        wandb.run drops (network hiccup, token refresh, etc.).  This
+        prevents a new run being created every 24h or after transient
+        failures.
+        """
+        try:
+            import wandb
+        except ImportError:
+            logger.warning("wandb not installed — W&B reporting disabled")
+            self.enabled = False
+            return False
+
+        # If the run is already alive, nothing to do
+        if self._initialized and wandb.run is not None:
             return True
 
         try:
-            import wandb
-
             run_name = f"validator-{self.validator_uid}"
             if self.validator_hotkey:
                 run_name = f"{run_name}-{self.validator_hotkey[:8]}"
 
+            # Deterministic run ID so resume="allow" always reconnects
+            # to the same run for this validator, even across restarts.
+            run_id = self._run_id
+            if run_id is None:
+                # First init — generate and remember
+                run_id = wandb.util.generate_id()
+                self._run_id = run_id
+
             tags = [
                 f"Version: {TUNEFORGE_VERSION}",
-                f"Time: {datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}",
             ]
             if self.validator_hotkey:
                 tags.append(f"Wallet: {self.validator_hotkey}")
@@ -89,7 +111,6 @@ class WandbReporter:
                 "validator_hotkey": self.validator_hotkey,
                 "role": "validator",
                 "version": TUNEFORGE_VERSION,
-                "wandb_start_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             }
             if self.validator_hotkey:
                 config["HOTKEY_SS58"] = self.validator_hotkey
@@ -99,10 +120,11 @@ class WandbReporter:
             run = wandb.init(
                 project=self.project,
                 entity=self.entity,
+                id=run_id,
                 name=run_name,
                 config=config,
                 tags=tags,
-                reinit=True,
+                resume="allow",
             )
 
             if self.wallet and hasattr(self.wallet, "hotkey") and run:
@@ -113,16 +135,11 @@ class WandbReporter:
                     pass
 
             self._initialized = True
-            logger.info(f"W&B initialized: {self.entity}/{self.project} as {run_name}")
+            logger.info(f"W&B initialized: {self.entity}/{self.project} as {run_name} (id={run_id})")
             return True
 
-        except ImportError:
-            logger.warning("wandb not installed — W&B reporting disabled")
-            self.enabled = False
-            return False
         except Exception as exc:
             logger.error(f"Failed to initialize W&B: {exc}")
-            self.enabled = False
             return False
 
     def log_round(
@@ -154,9 +171,9 @@ class WandbReporter:
 
         try:
             import wandb
-            if wandb.run is None:
-                if not self._initialize():
-                    return
+            # Re-establish run if it dropped (network hiccup, token refresh)
+            if not self._initialize():
+                return
 
             data: dict[str, Any] = {}
 
@@ -203,7 +220,7 @@ class WandbReporter:
 
         try:
             import wandb
-            if wandb.run is None:
+            if not self._initialize():
                 return
 
             with self._lock:
