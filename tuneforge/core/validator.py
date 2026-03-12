@@ -339,7 +339,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 status_code = '?'
                 status_msg = ''
             if hasattr(resp, 'audio_b64') and resp.audio_b64 is not None:
-                logger.info(f"  UID {uid}: got audio ({len(resp.audio_b64)} chars b64) status={status_code}")
+                logger.debug(f"  UID {uid}: got audio ({len(resp.audio_b64)} chars b64) status={status_code}")
             else:
                 logger.debug(f"  UID {uid}: no audio, status={status_code} msg={status_msg}")
 
