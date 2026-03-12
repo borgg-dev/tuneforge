@@ -1,0 +1,301 @@
+"""
+Settings module for TuneForge Subnet.
+
+Provides singleton configuration management with Bittensor integration.
+Loads from environment variables and manages wallet/subtensor connections.
+"""
+
+from functools import cached_property
+from typing import Any, Literal, Optional
+import os
+import time
+
+import bittensor as bt
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
+from tuneforge import NETUID, DEFAULT_GENERATION_TIMEOUT, DEFAULT_ROUND_INTERVAL, DEFAULT_EPOCH_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL
+
+
+class Settings(BaseSettings):
+    """
+    Singleton settings for TuneForge subnet neurons.
+
+    Loads configuration from environment variables (TF_ prefix) and provides
+    lazy-loaded Bittensor primitives (wallet, subtensor, metagraph).
+    """
+
+    model_config = {"extra": "ignore", "env_prefix": "TF_", "env_file": ".env", "env_file_encoding": "utf-8"}
+
+    # Runtime mode
+    mode: Literal["miner", "validator"] = "miner"
+
+    # Network configuration
+    netuid: int = Field(default=NETUID, description="Subnet network UID")
+    subtensor_network: Optional[str] = Field(
+        default=None,
+        description="Subtensor network (finney, test, local)"
+    )
+    subtensor_chain_endpoint: Optional[str] = Field(
+        default=None,
+        description="Custom chain endpoint URL"
+    )
+
+    # Wallet configuration
+    wallet_name: str = Field(default="default", description="Wallet name")
+    wallet_hotkey: str = Field(default="default", description="Hotkey name")
+    wallet_path: str = Field(default="~/.bittensor/wallets", description="Wallet path")
+
+    # Neuron configuration
+    neuron_epoch_length: int = Field(
+        default=100,
+        description="Blocks between weight updates"
+    )
+    neuron_timeout: int = Field(
+        default=DEFAULT_GENERATION_TIMEOUT,
+        description="Forward timeout in seconds"
+    )
+    neuron_axon_off: bool = Field(
+        default=False,
+        description="Disable axon serving"
+    )
+    axon_port: Optional[int] = Field(
+        default=None,
+        description="Axon port for serving requests"
+    )
+    axon_external_port: Optional[int] = Field(
+        default=None,
+        description="External port advertised on-chain (for Docker/NAT port mapping)"
+    )
+    axon_external_ip: Optional[str] = Field(
+        default=None,
+        description="External IP advertised on-chain (for Docker/NAT setups)"
+    )
+
+    # Music generation configuration
+    model_name: str = Field(
+        default="facebook/musicgen-large",
+        description="Music generation model (facebook/musicgen-large, stable_audio, ace-step-1.5, etc.)"
+    )
+    generation_max_duration: int = Field(
+        default=30,
+        description="Maximum generation duration in seconds"
+    )
+    generation_sample_rate: int = Field(
+        default=32000,
+        description="Audio sample rate in Hz"
+    )
+    generation_timeout: int = Field(
+        default=DEFAULT_GENERATION_TIMEOUT,
+        description="Timeout for music generation requests"
+    )
+    gpu_device: str = Field(
+        default="cuda:0",
+        description="GPU device for model inference"
+    )
+    model_precision: Literal["float32", "float16", "bfloat16"] = Field(
+        default="float16",
+        description="Model inference precision"
+    )
+    guidance_scale: float = Field(
+        default=3.0,
+        description="Classifier-free guidance scale for generation"
+    )
+    temperature: float = Field(
+        default=1.0,
+        description="Sampling temperature for generation"
+    )
+    top_k: int = Field(
+        default=250,
+        description="Top-K sampling parameter (0 = disabled)"
+    )
+    top_p: float = Field(
+        default=0.0,
+        description="Nucleus sampling parameter (0 = disabled)"
+    )
+
+    # Validation configuration
+    round_interval: int = Field(
+        default=DEFAULT_ROUND_INTERVAL,
+        description="Seconds between validation rounds"
+    )
+    epoch_interval: int = Field(
+        default=DEFAULT_EPOCH_INTERVAL,
+        description="Seconds between epochs (must be a multiple of round_interval)"
+    )
+    # Preference model
+    preference_model_path: Optional[str] = Field(
+        default=None,
+        description="Path to trained preference model checkpoint (.pt file)",
+    )
+    acoustid_api_key: str = Field(
+        default="",
+        description="AcoustID API key for known-song fingerprint lookup (optional)",
+    )
+
+    # Weight setting
+    weight_setter_step: int = Field(
+        default=DEFAULT_WEIGHT_UPDATE_INTERVAL,
+        description="Blocks between weight setting attempts"
+    )
+
+    # Subnet API server configuration
+    api_host: str = Field(default="0.0.0.0", description="API server host")
+    api_port: int = Field(default=8000, description="API server port")
+    api_max_queue_size: int = Field(default=100, description="Max pending API requests")
+
+    # Validator organic API (HTTP server inside the validator process)
+    organic_api_enabled: bool = Field(
+        default=True,
+        description="Enable organic generation API on the validator",
+    )
+    organic_api_port: int = Field(
+        default=8090,
+        description="Port for the validator's organic generation API",
+    )
+
+    # Storage (local filesystem for leaderboard snapshots and audio fallback)
+    storage_path: str = Field(
+        default="./storage",
+        description="Local storage path for leaderboard snapshots and audio files"
+    )
+
+    # Validator ↔ Platform API integration
+    validator_api_url: str = Field(
+        default="",
+        description="Platform API base URL (e.g. https://tuneforge.io). Required for validators to push data.",
+    )
+    validator_api_token: str = Field(
+        default="",
+        description="Bearer token validators send to authenticate with the platform API",
+    )
+
+    # Frontend URL (for CORS)
+    frontend_url: str = Field(
+        default="http://localhost:3000",
+        description="Frontend application URL"
+    )
+
+    # Logging
+    log_level: str = Field(default="INFO", description="Log level")
+    log_dir: str = Field(default="/tmp/tuneforge", description="Log directory")
+
+    # Monitoring
+    wandb_enabled: bool = Field(default=False, description="Enable W&B logging")
+    wandb_entity: str = Field(default="borgglab", description="W&B entity (organization)")
+    wandb_project: str = Field(default="tuneforge", description="W&B project name")
+    wandb_api_key: str = Field(default="", description="W&B API key for non-interactive auth")
+
+    # Internal state
+    _wallet: Optional["bt.Wallet"] = None
+    _subtensor: Optional["bt.Subtensor"] = None
+    _metagraph: Optional["bt.Metagraph"] = None
+    _metagraph_last_sync: float = 0
+    _metagraph_sync_interval: int = 300  # 5 minutes
+
+    @cached_property
+    def wallet(self) -> "bt.Wallet":
+        """Get or create Bittensor wallet."""
+        return bt.Wallet(
+            name=self.wallet_name,
+            hotkey=self.wallet_hotkey,
+            path=os.path.expanduser(self.wallet_path)
+        )
+
+    @cached_property
+    def subtensor(self) -> "bt.Subtensor":
+        """Get or create Bittensor subtensor connection."""
+        if self.subtensor_chain_endpoint:
+            return bt.Subtensor(chain_endpoint=self.subtensor_chain_endpoint)
+        elif self.subtensor_network:
+            return bt.Subtensor(network=self.subtensor_network)
+        else:
+            return bt.Subtensor()
+
+    @property
+    def metagraph(self) -> "bt.Metagraph":
+        """
+        Get metagraph with automatic sync.
+
+        Syncs every 20 minutes to keep data fresh without
+        excessive chain queries.
+        """
+        current_time = time.time()
+        if (
+            self._metagraph is None
+            or current_time - self._metagraph_last_sync > self._metagraph_sync_interval
+        ):
+            self._metagraph = self.subtensor.metagraph(self.netuid)
+            self._metagraph_last_sync = current_time
+        return self._metagraph
+
+    def sync_metagraph(self) -> "bt.Metagraph":
+        """Force metagraph sync."""
+        self._metagraph = self.subtensor.metagraph(self.netuid)
+        self._metagraph_last_sync = time.time()
+        return self._metagraph
+
+    @cached_property
+    def dendrite(self) -> "bt.Dendrite":
+        """Get or create dendrite for outbound queries."""
+        return bt.Dendrite(wallet=self.wallet)
+
+    @property
+    def axon(self) -> "bt.Axon":
+        """Create axon for serving requests.
+
+        Supports Docker/NAT port mapping via axon_external_port and
+        axon_external_ip — the axon listens on axon_port but registers
+        the external address on-chain so other nodes can reach it.
+        """
+        kwargs: dict[str, Any] = {"wallet": self.wallet}
+        if self.axon_port:
+            kwargs["port"] = self.axon_port
+        if self.axon_external_port:
+            kwargs["external_port"] = self.axon_external_port
+        if self.axon_external_ip:
+            kwargs["external_ip"] = self.axon_external_ip
+        return bt.Axon(**kwargs)
+
+    def get_uid(self) -> Optional[int]:
+        """Get this neuron's UID from metagraph."""
+        try:
+            return self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
+        except ValueError:
+            return None
+
+    def is_registered(self) -> bool:
+        """Check if this neuron is registered on the subnet."""
+        return self.get_uid() is not None
+
+    def get_stake(self, uid: Optional[int] = None) -> float:
+        """Get stake for a UID (defaults to self)."""
+        if uid is None:
+            uid = self.get_uid()
+        if uid is None:
+            return 0.0
+        return float(self.metagraph.S[uid])
+
+    def is_validator(self, uid: Optional[int] = None) -> bool:
+        """Check if UID has validator permit from chain."""
+        if uid is None:
+            uid = self.get_uid()
+        if uid is None:
+            return False
+        return self.metagraph.validator_permit[uid]
+
+
+# Global settings singleton
+settings: Settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get the global settings singleton."""
+    return settings
+
+
+def reload_settings() -> Settings:
+    """Reload settings from environment."""
+    global settings
+    settings = Settings()
+    return settings

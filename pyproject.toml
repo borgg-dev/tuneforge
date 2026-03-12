@@ -1,0 +1,148 @@
+[project]
+name = "tuneforge"
+version = "1.0.0"
+description = "TuneForge Subnet - Decentralized AI Music Generation on Bittensor"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10,<3.13"
+authors = [
+    { name = "TuneForge Team" }
+]
+keywords = [
+    "bittensor",
+    "subnet",
+    "music",
+    "generation",
+    "ai",
+    "decentralized",
+    "audio",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Bittensor core
+    "bittensor>=10.0.0",
+    # ML / Audio generation — torch >=2.4 required for numpy 2.x compat (bittensor requires numpy>=2.0.1)
+    "torch>=2.4.0",
+    "torchaudio>=2.4.0",
+    "numpy>=2.0.1",
+    "scipy>=1.11.0",
+    "transformers>=4.36.0",
+    # audiocraft is installed separately with --no-deps (it hard-pins torch==2.1.0)
+    # "audiocraft>=1.3.0",
+    "accelerate>=0.34.0",
+    "Pillow>=9.1.0",
+    "psutil>=5.9.0",
+    # HuggingFace model hub (downloads, auth for gated models)
+    "huggingface-hub>=0.20.0",
+    # Stable Audio (diffusion scheduler requires torchsde)
+    "diffusers>=0.25.0",
+    "torchsde>=0.2.5",
+    # Audio processing
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "pydub>=0.25.0",
+    # Audio scoring
+    "laion-clap>=1.1.0",
+    # API server
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.6",
+    # Configuration
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    # Logging
+    "loguru>=0.7.0",
+    # Database
+    "sqlalchemy>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    # Auth & security
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt==4.2.1",  # passlib 1.7.x breaks with bcrypt 5.x
+    "python-jose[cryptography]>=3.3.0",
+    "email-validator>=2.0.0",
+    # Redis
+    "redis[hiredis]>=5.0.0",
+    # Storage
+    "boto3>=1.29.0",
+    "aiofiles>=23.2.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+]
+dev = [
+    "tuneforge[test]",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+all = [
+    "tuneforge[dev]",
+]
+
+[project.scripts]
+tuneforge-miner = "neurons.miner:main"
+tuneforge-validator = "neurons.validator:main"
+
+[project.urls]
+Homepage = "https://github.com/tuneforge-subnet/tuneforge"
+Documentation = "https://github.com/tuneforge-subnet/tuneforge#readme"
+Repository = "https://github.com/tuneforge-subnet/tuneforge.git"
+Issues = "https://github.com/tuneforge-subnet/tuneforge/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tuneforge", "neurons"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.isort]
+known-first-party = ["tuneforge", "neurons"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

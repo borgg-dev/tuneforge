@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libsndfile1 git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN pip install --no-cache-dir -e .
+
+RUN mkdir -p /app/storage /tmp/tuneforge
+
+# Pre-download CLAP model
+RUN python -c "from transformers import ClapModel, ClapProcessor; \
+    ClapModel.from_pretrained('laion/larger_clap_music'); \
+    ClapProcessor.from_pretrained('laion/larger_clap_music')"
+
+EXPOSE 8092
+
+ENTRYPOINT ["python", "-m", "neurons.validator"]
+CMD ["--env-file", ".env.validator"]
