@@ -31,3 +31,4 @@ annotations.jsonl
 embeddings.npz
 .github/
 .claude/
+DOCS_PROMPT.md
