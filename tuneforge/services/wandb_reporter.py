@@ -203,7 +203,7 @@ class WandbReporter:
             data.update(self._build_leaderboard_metrics(leaderboard))
 
             wandb.log(data, step=step)
-            logger.debug(f"W&B logged round {challenge_id} at step {step} ({len(breakdowns)} miners)")
+            logger.info(f"W&B logged round {challenge_id} at step {step} ({len(breakdowns)} miners)")
 
         except Exception as exc:
             logger.error(f"W&B logging error: {exc}")
