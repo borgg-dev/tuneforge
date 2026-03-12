@@ -492,12 +492,15 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 )
 
         # 7. Decay EMA for non-responding miners (score 0.0)
+        # IMPORTANT: Only decay miners that were in OUR assigned subset.
+        # In permutation mode, miners not in our subset were assigned to
+        # other validators — "no response" means "not assigned", not "failed".
         valid_uid_set = set(valid_uids)
         non_responding = [uid for uid in miner_uids if uid not in valid_uid_set]
         for uid in non_responding:
             self._leaderboard.update(uid, 0.0)
         if non_responding:
-            logger.info(f"Applied score=0.0 to {len(non_responding)} non-responding miners")
+            logger.info(f"Applied score=0.0 to {len(non_responding)} non-responding miners (of {len(miner_uids)} assigned)")
 
         # 8. Save leaderboard snapshot for the organic query router
         try:

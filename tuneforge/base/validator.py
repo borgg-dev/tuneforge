@@ -5,14 +5,14 @@ Extends BaseNeuron with validator-specific functionality:
 - Miner querying and availability checking
 - Validation round orchestration
 - Scoring and weight setting
-- Challenge generation with time-synchronised miner subsets
+- Commit-sync permutation for multi-validator coordination
 """
 
 import asyncio
 import hashlib
 import time
 from abc import abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 import bittensor as bt
 import numpy as np
@@ -23,6 +23,7 @@ from tuneforge.base.dendrite import DendriteResponseEvent
 from tuneforge.base.neuron import BaseNeuron
 from tuneforge.base.protocol import PingSynapse
 from tuneforge.settings import Settings, get_settings
+from tuneforge.validation.commit_sync import CommitSync
 from tuneforge import DEFAULT_VALIDATION_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL
 
 
@@ -63,6 +64,11 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     should_exit: bool = Field(default=False)
     active_miner_uids: list[int] = Field(default_factory=list)
 
+    # Commit-sync for multi-validator permutation (initialised in setup)
+    _commit_sync: Optional[CommitSync] = None
+    # Miner subset assigned by commit-sync for the current round (None = all)
+    _current_round_subset: Optional[list[int]] = None
+
     def __init__(self, settings: Settings | None = None, **kwargs):
         """Initialise the validator neuron."""
         if settings is None:
@@ -75,7 +81,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     # ------------------------------------------------------------------
 
     def setup(self) -> None:
-        """Set up the validator (registration, dendrite, weight arrays)."""
+        """Set up the validator (registration, dendrite, weight arrays, commit sync)."""
         logger.info("Setting up validator…")
 
         if not self.check_registered():
@@ -85,6 +91,14 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         n_uids = len(self.metagraph.S)
         self.scores = np.zeros(n_uids, dtype=np.float32)
         self.weights = np.zeros(n_uids, dtype=np.float32)
+
+        # Initialise commit-sync for multi-validator permutation
+        self._commit_sync = CommitSync(
+            subtensor=self.subtensor,
+            wallet=self.wallet,
+            netuid=self.settings.netuid,
+            metagraph=self.metagraph,
+        )
 
         logger.info(f"Validator setup complete. UID: {self.uid}")
 
@@ -216,11 +230,13 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         return result
 
     def get_miner_subset(self) -> list[int]:
-        """
-        Get the miners to query this round.
+        """Get the miners to query this round.
 
-        Returns all available miner UIDs (non-validators) up to the subnet size.
+        If commit-sync assigned a permutation subset, return that.
+        Otherwise fall back to all miner UIDs (stagger-only mode).
         """
+        if self._current_round_subset is not None:
+            return self._current_round_subset
         return self.get_miner_uids()
 
     # ------------------------------------------------------------------
@@ -382,64 +398,96 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
             return 0.0
 
     async def _validation_loop(self) -> None:
-        """Async validation loop with epoch-aligned challenge staggering.
+        """Async validation loop with commit-sync permutation.
 
-        Instead of random jitter, validators compute a deterministic offset
-        within each cycle based on their metagraph position.  This guarantees
-        that validators fire challenges at evenly-spaced times, completely
-        eliminating miner queue congestion from concurrent challenge rounds.
+        Epoch-aligned polling pattern:
+        - Poll every 1 second
+        - When ``current_time % epoch_length == 0``, ALL validators fire
+          simultaneously (same UTC second)
+        - Commit the timestamp → wait for finality → discover active
+          validators → partition miners → run round on assigned subset
 
-        With N validators on a 600s cycle, challenges arrive ~600/N seconds
-        apart — well within a miner's ability to complete one generation
-        (30-60s) before the next arrives.
+        This guarantees all validators commit the exact same value because
+        they all trigger on the same modulo boundary.
         """
-        base_interval = self.settings.validation_interval
-        stagger_offset = self._compute_stagger_offset()
+        epoch_length = self.settings.validation_interval
 
-        # Wait for our first slot (epoch-aligned)
-        now = time.time()
-        cycle_number = int(now / base_interval)
-        first_target = cycle_number * base_interval + stagger_offset
-        if first_target <= now:
-            first_target += base_interval
-        initial_wait = first_target - now
-
+        from tuneforge.validation.commit_sync import COMMIT_FINALITY_WAIT
+        from datetime import datetime, timezone
+        remaining = self._seconds_until_next_epoch(epoch_length)
         logger.info(
-            f"Challenge stagger: waiting {initial_wait:.0f}s for first "
-            f"slot (offset {stagger_offset:.0f}s in {base_interval}s cycle)"
+            f"Validator is up and running, next round starting in ~{remaining}s... "
+            f"(epoch every {epoch_length}s)"
         )
-        await self._async_wait(initial_wait)
 
         loop = asyncio.get_event_loop()
         while self.is_running and not self.should_exit:
             try:
-                # Metagraph resync is handled inside run_validation_round()
-                # via run_in_executor, so we skip the blocking sync() here.
+                current_time = int(time.time())
 
+                if current_time % epoch_length != 0:
+                    await asyncio.sleep(1)
+                    continue
+
+                # --- Epoch boundary hit — all validators fire now ---
+                now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                logger.info(
+                    f"📢 Starting new round at {now_utc} UTC."
+                )
+                logger.info(
+                    f"🐛 Committing Proof of Activity : {current_time}"
+                )
+
+                self._current_round_subset = None
+
+                if self._commit_sync is not None:
+                    try:
+                        self._commit_sync.update_metagraph(self.metagraph)
+                        all_miners = self.get_miner_uids()
+
+                        subset = await self._commit_sync.sync_round(
+                            sync_time=current_time,
+                            my_uid=self.uid,
+                            all_miner_uids=all_miners,
+                            loop=loop,
+                        )
+                        if subset is not None:
+                            self._current_round_subset = subset
+                            active = self._commit_sync.active_count
+                            if subset:
+                                logger.info(
+                                    f"🚀 Round ready: {len(subset)}/{len(all_miners)} miners "
+                                    f"assigned ({active} active validators)"
+                                )
+                            else:
+                                logger.warning("📖 No miners assigned for this round.")
+                        else:
+                            logger.warning(
+                                "❌ Commit-sync returned None — skipping round"
+                            )
+                            await asyncio.sleep(2)  # avoid re-triggering same second
+                            continue
+                    except Exception as exc:
+                        logger.error("❌ Commit-sync failed — skipping round: {}", exc)
+                        await asyncio.sleep(2)
+                        continue
+
+                # --- Run the validation round ---
                 response_event = await self.run_validation_round()
                 self.process_round_results(response_event)
 
-                # log_status calls self.block (sync chain call), run in executor
+                self._current_round_subset = None
+
+                remaining = self._seconds_until_next_epoch(epoch_length)
+                logger.info(
+                    f"🎉 End of round, next round in ~{remaining}s..."
+                )
+
                 await loop.run_in_executor(None, self.log_status)
                 self.step += 1
 
-                # Recompute stagger offset (validator set may change)
-                stagger_offset = self._compute_stagger_offset()
-
-                # Find next epoch-aligned slot for this validator
-                now = time.time()
-                cycle_number = int(now / base_interval)
-                target = cycle_number * base_interval + stagger_offset
-                # If we've already passed this cycle's slot, use next cycle
-                if target <= now:
-                    target += base_interval
-                jitter = self._compute_cycle_jitter(int(target / base_interval))
-                target += jitter
-                remaining = target - now
-
-                if remaining > 0:
-                    logger.info(f"Waiting {remaining:.0f}s until next stagger slot…")
-                    await self._async_wait(remaining)
+                # Sleep past this epoch second to avoid double-trigger
+                await asyncio.sleep(2)
 
             except asyncio.CancelledError:
                 break
@@ -448,6 +496,12 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
             except Exception as exc:
                 logger.error(f"Error in validation loop: {exc}")
                 await asyncio.sleep(60)
+
+    @staticmethod
+    def _seconds_until_next_epoch(epoch_length: int) -> int:
+        """Seconds until the next epoch boundary."""
+        now = int(time.time())
+        return epoch_length - (now % epoch_length)
 
     async def _async_wait(self, seconds: float) -> None:
         """Wait in 1-second increments, checking should_exit."""

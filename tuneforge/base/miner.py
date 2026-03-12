@@ -24,6 +24,10 @@ from tuneforge.base.protocol import (
 )
 from tuneforge.settings import Settings, get_settings
 
+# Minimum alpha stake for a validator to be whitelisted on the miner side.
+# Validators below this threshold are blacklisted by miners.
+MIN_VALIDATOR_STAKE: float = 10_000.0
+
 
 class BaseMinerNeuron(BaseModel, BaseNeuron):
     """
@@ -126,22 +130,39 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
     # Blacklisting
     # ------------------------------------------------------------------
 
+    def get_whitelisted_hotkeys(self) -> list[str]:
+        """Return hotkeys of validators that meet the stake threshold.
+
+        Only neurons with ``validator_permit`` AND stake >=
+        ``MIN_VALIDATOR_STAKE`` are allowed to query this miner.
+        """
+        return [
+            neuron.hotkey
+            for neuron in self.metagraph.neurons
+            if neuron.validator_permit
+            and float(self.metagraph.S[neuron.uid]) >= MIN_VALIDATOR_STAKE
+        ]
+
     def _check_blacklist(
         self, synapse: bt.Synapse
     ) -> Tuple[bool, str]:
         """
-        Common blacklist logic — only allow registered neurons.
+        Common blacklist logic — only allow whitelisted validators.
+
+        A caller is whitelisted if it has a validator permit AND at least
+        ``MIN_VALIDATOR_STAKE`` alpha stake.
         """
         caller_hotkey = synapse.dendrite.hotkey
         if not caller_hotkey:
             return True, "No hotkey provided"
 
-        try:
-            self.metagraph.hotkeys.index(caller_hotkey)
-        except ValueError:
-            return True, "Caller not registered"
+        whitelisted = self.get_whitelisted_hotkeys()
+        if caller_hotkey not in whitelisted:
+            logger.trace(f"Blacklisting hotkey {caller_hotkey[:16]}… (not whitelisted)")
+            return True, "Not a whitelisted validator"
 
-        return False, "Allowed"
+        logger.trace(f"Allowing whitelisted hotkey {caller_hotkey[:16]}…")
+        return False, "Whitelisted validator"
 
     # ------------------------------------------------------------------
     # Priority

@@ -24,7 +24,8 @@ from tuneforge.settings import Settings, get_settings
 
 
 # Minimum stake required for generation requests (filters out non-validators)
-MIN_GENERATION_STAKE: float = 1000.0
+# Validators below this threshold are blacklisted.
+MIN_GENERATION_STAKE: float = 10_000.0
 
 
 class TuneForgeMiner(BaseMinerNeuron):
@@ -248,7 +249,8 @@ class TuneForgeMiner(BaseMinerNeuron):
     ) -> Tuple[bool, str]:
         """Determine if a generation request should be blacklisted.
 
-        Requires the caller to have a validator permit and minimum stake.
+        Requires the caller to have a validator permit and at least
+        ``MIN_GENERATION_STAKE`` alpha stake.
 
         Args:
             synapse: Incoming generation request.
@@ -260,12 +262,13 @@ class TuneForgeMiner(BaseMinerNeuron):
         if not caller_hotkey:
             return True, "No hotkey provided"
 
-        try:
-            caller_uid = self.metagraph.hotkeys.index(caller_hotkey)
-        except ValueError:
-            return True, f"Hotkey {caller_hotkey[:16]}… not registered"
+        whitelisted = self.get_whitelisted_hotkeys()
+        if caller_hotkey not in whitelisted:
+            logger.trace(f"Blacklisting generation from {caller_hotkey[:16]}… (not whitelisted)")
+            return True, "Not a whitelisted validator"
 
-        return False, f"Allowed: UID {caller_uid}"
+        logger.trace(f"Allowing generation from whitelisted {caller_hotkey[:16]}…")
+        return False, "Whitelisted validator"
 
     # ------------------------------------------------------------------
     # Priority
