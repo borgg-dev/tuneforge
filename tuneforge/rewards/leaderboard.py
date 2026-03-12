@@ -182,7 +182,8 @@ class MinerLeaderboard:
 
     def get_all_uids(self) -> list[int]:
         """Get all tracked miner UIDs."""
-        return list(self._ema.keys())
+        with self._lock:
+            return list(self._ema.keys())
 
     def snapshot(self) -> dict:
         """Return a serialisable snapshot of the leaderboard state.
@@ -190,8 +191,8 @@ class MinerLeaderboard:
         Used to share EMA scores with the organic query router
         (which runs in a separate API server process).
         """
-        all_weights = self.get_all_weights()
         with self._lock:
+            all_weights = self.get_all_weights()
             ranked = sorted(self._ema.items(), key=lambda x: x[1], reverse=True)
             entries = {}
             for rank, (uid, ema) in enumerate(ranked):

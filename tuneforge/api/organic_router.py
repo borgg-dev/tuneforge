@@ -321,7 +321,11 @@ class OrganicQueryRouter:
         Set ``TF_LOCAL_MINER_IPS`` (comma-separated) to list external IPs
         that should be rewritten.  If unset, no rewriting happens.
         """
-        axon = self._metagraph.axons[uid]
+        try:
+            axon = self._metagraph.axons[uid]
+        except (IndexError, AttributeError):
+            logger.warning("[ORGANIC] UID {} out of bounds in metagraph", uid)
+            return None
         local_ips = os.environ.get("TF_LOCAL_MINER_IPS", "")
         if not local_ips:
             return axon
@@ -340,6 +344,8 @@ class OrganicQueryRouter:
     ) -> tuple[bytes | None, dict]:
         """Send the generation request to a single miner and validate."""
         axon = self._resolve_axon(uid)
+        if axon is None:
+            return None, {"uid": uid, "error": "axon_not_found"}
 
         # Track in-flight
         async with self._lock:

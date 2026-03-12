@@ -11,10 +11,10 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, ACE-Step 1.5, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns TAO rewards proportional to quality scores assigned by validators.
-- Handles organic queries from the SaaS API. These do not affect scoring. Organic queries are prioritized over validation challenges (`organic_boost = 1,000,000`).
+- Handles organic requests from the SaaS API. Organic requests do not affect scoring.
 
 ---
 
@@ -36,7 +36,7 @@ Minimum hardware specifications (from `min_compute.yml`):
 | Model | `TF_MODEL_NAME` | VRAM | Sample Rate |
 |-------|-----------------|------|-------------|
 | **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
-| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo (gated — requires HF login) |
+| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo (gated -- requires HF login) |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | 32 kHz mono |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
@@ -229,7 +229,7 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
 | **MusicGen Large** | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer (3.3B params) |
-| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo. Gated model — requires HuggingFace login |
+| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo. Gated model -- requires HuggingFace login |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Requires separate repo clone |
@@ -296,30 +296,39 @@ pm2 start ecosystem.config.js --only tuneforge-miner-2
 
 ## How Scoring Works
 
-Understanding the scoring system helps you maximize rewards. The validator evaluates your audio across 18 scoring signals and applies 3 penalty multipliers. The scoring is model-agnostic -- it evaluates the audio itself, not what model produced it.
+Understanding the scoring system helps you maximize rewards. The validator evaluates your audio across 16 scoring dimensions and applies 4 penalty multipliers. The scoring is model-agnostic -- it evaluates the audio itself, not what model produced it.
 
-### Scoring Signals (18 scorers)
+### Weight Distribution Summary
 
-| Signal | Weight | What It Measures |
+| Category | Scorers | Combined Weight |
+|----------|---------|-----------------|
+| Prompt adherence | CLAP (0.19), Attribute (0.11) | 30% |
+| Composition | Musicality (0.09), Melody (0.06), Structural (0.06) | 21% |
+| Naturalness/mix | Vocal Lyrics (0.08), Mix Separation (0.04), Timbral (0.03), Learned MOS (0.03) | 18% |
+| Production/fidelity | Production (0.05), Neural Quality (0.05), Vocal (0.04), Audio Quality (0.02) | 16% |
+| Other | Diversity (0.06), Speed (0.02) | 8% |
+| Preference | Preference (0.07 base) | 0% bootstrap, 2--20% trained |
+
+### The 16 Scoring Dimensions
+
+| Scorer | Weight | What It Measures |
 |--------|--------|-----------------|
-| CLAP Adherence | 15% | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity mapped from [0.15, 0.75] to [0, 1]. |
-| Attribute | 9% | Attribute-level quality assessment |
-| Musicality | 9% | Pitch, harmony, rhythm, arrangement quality |
-| Vocal Lyrics | 8% | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, sibilance |
-| Diversity | 8% | CLAP embedding diversity across your last 50 outputs (70% intra-miner, 30% population-level bonus) |
-| Preference Model | 7% | Perceptual quality scoring (0% during bootstrap, auto-scales 2-20% once trained) |
-| Melody Coherence | 6% | Melodic intervals, contour, structure |
-| Structural Completeness | 6% | Section detection, song form, compositional arc |
-| Production Quality | 5% | Spectral balance, loudness (LUFS), dynamics |
-| Neural Quality (MERT) | 5% | Learned music representations via `m-a-p/MERT-v1-95M` |
-| Timbral Naturalness | 5% | Spectral envelope, harmonic decay, transient quality |
-| Vocal Quality | 4% | Vocal presence, clarity, pitch accuracy (genre-aware) |
-| Mix Separation | 4% | Spectral clarity, frequency masking, spatial depth |
-| Learned MOS | 3% | Multi-resolution perceptual quality estimation |
-| Audio Quality | 2% | Signal-level analysis (harmonic ratio, onsets, contrast) |
-| Speed | 2% | Duration-relative generation speed (see below) |
-| Perceptual | 1% | Perceptual audio quality |
-| Neural Codec | 1% | EnCodec reconstruction quality |
+| CLAP Adherence | 0.19 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity mapped from [0.15, 0.75] to [0, 1]. |
+| Attribute Verification | 0.11 | Attribute-level verification (genre, mood, tempo, key, instruments) |
+| Musicality | 0.09 | Pitch, harmony, rhythm, arrangement quality |
+| Vocal Lyrics | 0.08 | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, sibilance |
+| Preference Model | 0.07 base | Perceptual quality scoring (0% during bootstrap, auto-scales 2--20% once trained) |
+| Melody Coherence | 0.06 | Melodic intervals, contour, structure |
+| Structural Completeness | 0.06 | Section detection, song form, compositional arc |
+| Diversity | 0.06 | CLAP embedding diversity across your last 50 outputs (70% intra-miner, 30% population-level bonus) |
+| Production Quality | 0.05 | Spectral balance, loudness (LUFS), dynamics |
+| Neural Quality (MERT) | 0.05 | Learned music representations via `m-a-p/MERT-v1-95M` |
+| Vocal Quality | 0.04 | Vocal presence, clarity, pitch accuracy (genre-aware) |
+| Mix Separation | 0.04 | Spectral clarity, frequency masking, spatial depth |
+| Timbral Naturalness | 0.03 | Spectral envelope, harmonic decay, transient quality |
+| Learned MOS | 0.03 | Multi-resolution perceptual quality estimation |
+| Audio Quality | 0.02 | Signal-level analysis (harmonic ratio, onsets, contrast) |
+| Speed | 0.02 | Duration-relative generation speed (see below) |
 
 ### Speed Scoring
 
@@ -334,19 +343,20 @@ The generation time is measured by the validator via `dendrite.process_time`, no
 
 ### Final Score Calculation
 
-The composite score from all 18 scorers is multiplied by three penalty factors:
+The composite score from all 16 scorers is multiplied by four penalty factors:
 
 ```
-final_score = composite * duration_penalty * artifact_penalty * fad_penalty
+final_score = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
 ```
 
-### Penalty Multipliers (3)
+### Penalty Multipliers (4)
 
 | Penalty | Trigger | Effect |
 |---------|---------|--------|
 | Duration | Off-target by more than 20% | Linear penalty reaching 0.0 at 50% deviation |
-| Artifact | Clipping, loops, spectral discontinuities | Multiplier 0-1 applied to final score |
+| Artifact | Clipping, loops, spectral discontinuities | Multiplier 0--1 applied to final score |
 | FAD | Per-miner Frechet Audio Distance | Sigmoid curve, floor 0.5 |
+| Fingerprint | AcoustID known-song match | Multiplier 0.0--1.0 (threshold 0.80) |
 
 ### Hard Penalties (score = 0)
 
@@ -360,7 +370,7 @@ final_score = composite * duration_penalty * artifact_penalty * fad_penalty
 The system adjusts scoring emphasis based on requested duration:
 
 - **Short (<10s):** Higher weight on production, quality, and timbral naturalness.
-- **Medium (10-30s):** Baseline weights.
+- **Medium (10--30s):** Baseline weights.
 - **Long (>=30s):** Higher weight on structure, melody, and composition. Bonuses for phrase coherence (+0.05) and compositional arc (+0.05).
 
 ### Genre-Aware Scoring
@@ -378,12 +388,12 @@ The system recognizes 9 genre families with per-genre quality targets:
 
 ### Optimization Tips
 
-- **Prompt adherence (CLAP, 15%) is the single largest signal.** Your model must faithfully follow the text prompt.
+- **Prompt adherence (CLAP, 19%) is the single largest signal.** Your model must faithfully follow the text prompt.
 - **Quality signals dominate.** Better models consistently score higher across all quality dimensions. This is why innovating beyond the baselines is the best path to higher rewards.
-- **Diversity (8%):** Do not recycle outputs. The system tracks your last 50 CLAP embeddings and compares against the full population.
+- **Diversity (6%):** Do not recycle outputs. The system tracks your last 50 CLAP embeddings and compares against the full population.
 - **Speed (2%):** Generate faster than real-time if possible, but do not sacrifice quality. Speed is only 2% of the total score.
 - **Duration accuracy matters.** Stay within 20% of the requested duration to avoid the duration penalty.
-- **Organic queries** (where `is_organic=True`) do not affect your validation score.
+- **Organic requests** (where `is_organic=True`) do not affect your scoring or weight.
 - **New miners** start with an EMA score of 0.0 and build up from their first scored round. The top 10 miners by EMA share 80% of total weight, creating a highly competitive ladder.
 - **MAX_DURATION is 180 seconds.** Validators may request audio up to 3 minutes long.
 
@@ -482,7 +492,7 @@ python3 -c "from acestep.model_downloader import download_models; download_model
 
 Check logs for per-signal scoring breakdowns. The most common causes of low scores are:
 
-1. **Poor prompt adherence** -- the largest single signal at 15%.
+1. **Poor prompt adherence** -- the largest single signal at 19%.
 2. **Duration mismatch** -- generating audio that is too short or too long relative to the request.
 3. **Repeated outputs** -- diversity tracking covers 50 recent generations with population-level diversity bonus.
 4. **Using a baseline model without improvements** -- the baselines are starting points. Fine-tuning or using a better model will yield higher scores.
@@ -525,4 +535,8 @@ pm2 restart tuneforge-miner-1
 docker compose up miner -d --build
 ```
 
-For full scoring details, see the project README.
+---
+
+## License
+
+TuneForge is released under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.

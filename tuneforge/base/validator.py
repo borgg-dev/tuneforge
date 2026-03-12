@@ -447,10 +447,10 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                         try:
                             self._commit_sync.update_metagraph(self.metagraph)
                             logger.info(
-                                f"📢 Starting new epoch at {now_utc} UTC."
+                                f"Starting new epoch at {now_utc} UTC."
                             )
                             logger.info(
-                                f"🐛 Committing Proof of Activity : {epoch_start}"
+                                f"Committing Proof of Activity : {epoch_start}"
                             )
                             synced = await self._commit_sync.sync_epoch(
                                 sync_time=epoch_start,
@@ -460,10 +460,10 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                             )
                             if not synced:
                                 logger.warning(
-                                    "❌ Commit-sync failed — skipping epoch"
+                                    "Commit-sync failed — skipping epoch"
                                 )
                         except Exception as exc:
-                            logger.error("❌ Commit-sync failed: {}", exc)
+                            logger.error("Commit-sync failed: {}", exc)
 
                     await asyncio.sleep(2)
                     continue
@@ -490,7 +490,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                             try:
                                 cycle_index = round_index % active
                                 logger.info(
-                                    f"📢 Round {round_index + 1}/{MAX_ROUNDS_PER_EPOCH} "
+                                    f"Round {round_index + 1}/{MAX_ROUNDS_PER_EPOCH} "
                                     f"(subset {cycle_index + 1}/{active}) "
                                     f"at {now_utc} UTC."
                                 )
@@ -503,12 +503,12 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                                     self._current_round_subset = subset
                                 else:
                                     logger.warning(
-                                        "❌ get_miner_subset returned None — skipping round"
+                                        "get_miner_subset returned None — skipping round"
                                     )
                                     await asyncio.sleep(2)
                                     continue
                             except Exception as exc:
-                                logger.error("❌ Subset selection failed: {}", exc)
+                                logger.error("Subset selection failed: {}", exc)
                                 await asyncio.sleep(2)
                                 continue
 
@@ -525,14 +525,14 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                         if remaining_rounds > 0:
                             next_round = self._seconds_until_next_epoch(round_interval)
                             logger.info(
-                                f"🎉 Next round in ~{next_round}s "
+                                f"Next round in ~{next_round}s "
                                 f"({remaining_rounds} rounds left in epoch)..."
                             )
                         else:
                             cooldown_end = epoch_start + epoch_interval
                             remaining_epoch = cooldown_end - int(time.time())
                             logger.info(
-                                f"🏁 All {MAX_ROUNDS_PER_EPOCH} rounds complete. "
+                                f"All {MAX_ROUNDS_PER_EPOCH} rounds complete. "
                                 f"Epoch cooldown ~{max(0, remaining_epoch)}s..."
                             )
 

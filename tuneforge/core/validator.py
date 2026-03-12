@@ -965,6 +965,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         top_k = [uid for uid, _ in scored[:k]]
 
+        if not top_k:
+            return serving[:k]
+
         best_ema = self._leaderboard.get_ema(top_k[0])
         worst_ema = self._leaderboard.get_ema(top_k[-1])
         logger.debug(

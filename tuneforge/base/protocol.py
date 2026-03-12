@@ -19,7 +19,7 @@ class MusicGenerationSynapse(bt.Synapse):
     Synapse for requesting AI music generation from miners.
 
     Validators send prompts with musical parameters; miners return
-    generated audio as base64-encoded WAV/MP3 data.
+    generated audio as base64-encoded WAV data.
     """
 
     # --- Request fields (validator → miner) ---

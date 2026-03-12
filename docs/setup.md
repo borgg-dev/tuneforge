@@ -7,7 +7,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [Validation Flow](#validation-flow)
+2. [Epoch and Round Structure](#epoch-and-round-structure)
 3. [Organic Generation Flow](#organic-generation-flow)
 4. [Scoring Pipeline](#scoring-pipeline)
 5. [Protocol Definitions](#protocol-definitions)
@@ -26,7 +26,7 @@ Complete reference for deploying and operating the TuneForge music generation su
 
 ## Architecture Overview
 
-TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 18 dimensions with 3 penalty multipliers, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
+TuneForge is a Bittensor subnet for AI music generation. Validators issue challenges to miners, score the returned audio across 16 dimensions with 4 penalty multipliers, maintain an EMA leaderboard, and set on-chain weights. The validator also serves an organic generation API (port 8090) that the SaaS backend calls for real-time music generation. An optional SaaS API layer provides user authentication and a credit system.
 
 ```mermaid
 flowchart TB
@@ -61,9 +61,9 @@ flowchart TB
     WS -->|set_weights| Chain
 
     FE -->|POST /organic/generate| Validator
-    Validator -->|fan-out top 10 by EMA| Miners
+    Validator -->|select one miner by EMA| Miners
     Miners -->|audio| Validator
-    Validator -->|top N results| FE
+    Validator -->|result| FE
 
     FE --> DB
     FE --> RD
@@ -71,9 +71,30 @@ flowchart TB
 
 ---
 
-## Validation Flow
+## Epoch and Round Structure
 
-The validation loop runs continuously on each validator node.
+The validation loop is organized into epochs. Each epoch contains a fixed sequence of phases:
+
+```
+Epoch (1140s / ~19 min):
+  [1] Commit-reveal sync     60s   (EPOCH_SYNC)
+  [2] Round 1               240s   (DEFAULT_ROUND_INTERVAL)
+  [3] Round 2               240s
+  [4] Round 3               240s
+  [5] Round 4               240s
+  [6] Cooldown              120s   (EPOCH_COOLDOWN)
+```
+
+Key constants (defined in `tuneforge/__init__.py`):
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_ROUNDS_PER_EPOCH` | 4 | Rounds per epoch |
+| `DEFAULT_ROUND_INTERVAL` | 240s | Time between rounds |
+| `EPOCH_SYNC` | 60s | Commit-reveal and blockchain finality at epoch start |
+| `EPOCH_COOLDOWN` | 120s | Sync buffer at epoch end |
+| `DEFAULT_EPOCH_INTERVAL` | 1140s (~19 min) | 60 + 4 x 240 + 120 |
+| `DEFAULT_WEIGHT_UPDATE_INTERVAL` | 115 blocks | Frequency of on-chain weight submissions |
 
 ```mermaid
 sequenceDiagram
@@ -94,7 +115,7 @@ sequenceDiagram
     M->>D: Return base64 WAV in synapse
     D->>V: Collect responses
     V->>RM: score_batch(responses)
-    Note over RM: Decode audio, check hard penalties,<br/>compute 18 signals + 3 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
+    Note over RM: Decode audio, check hard penalties,<br/>compute 16 signals + 4 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
     RM->>LB: update(scores)
     Note over LB: Apply EMA smoothing (alpha=0.2)
     LB->>LB: Save snapshot to storage/leaderboard.json
@@ -123,13 +144,14 @@ Organic requests from the SaaS backend flow through the validator's built-in HTT
 
 ```
 SaaS Backend -> POST /organic/generate -> Validator
-Validator -> fan-out to top 10 miners by EMA (30s timeout)
-Validator -> score all responses (same 18-signal pipeline)
-Validator -> update EMA leaderboard
-Validator -> return top N results to SaaS Backend
+Validator -> select one miner by EMA (weighted, with MIN_EMA_THRESHOLD=0.45, 120s timeout)
+Validator -> on failure, fall back to next-best miner
+Validator -> return result to SaaS Backend
 ```
 
-The validator runs the organic API server and the challenge validation loop concurrently on the same asyncio event loop. Scoring models are protected by a lock, and CPU-bound scoring runs in a thread pool executor so organic requests are not blocked by challenge rounds.
+Organic requests do **not** affect miner scores or weights. The challenge pipeline is the sole quality signal. The organic router selects a single miner per request (no fan-out) to avoid wasting compute, load-balancing across qualifying miners weighted by EMA score. Only miners with EMA >= 0.45 are eligible for organic traffic.
+
+The validator runs the organic API server and the challenge loop concurrently on the same asyncio event loop. Scoring models are protected by a lock, and CPU-bound scoring runs in a thread pool executor so organic requests are not blocked by rounds.
 
 ---
 
@@ -142,7 +164,7 @@ flowchart LR
     A[Decode Audio] --> B{Hard Penalties}
     B -->|Silence RMS < 0.01| Z[Score = 0]
     B -->|Timeout > 300s| Z
-    B -->|Pass| C[18 Component Scores]
+    B -->|Pass| C[16 Component Scores]
     C --> D[Multi-Scale Duration Adjustment]
     D --> E[Per-Round Weight Perturbation +/-30%]
     E --> F[Scorer Dropout 10%]
@@ -150,7 +172,8 @@ flowchart LR
     G --> H[Duration Penalty Multiplier]
     H --> I[Artifact Penalty Multiplier]
     I --> J[FAD Penalty Multiplier]
-    J --> K[Final Score 0 to 1]
+    J --> K[Fingerprint Penalty Multiplier]
+    K --> L[Final Score 0 to 1]
 ```
 
 ### Hard Penalties
@@ -209,12 +232,12 @@ Speed uses a **duration-relative ratio** (generation_time / requested_duration),
 
 Speed is measured using the validator-side `dendrite.process_time`, not miner-reported `generation_time_ms`.
 
-### 3 Penalty Multipliers
+### 4 Penalty Multipliers
 
 Penalties are applied multiplicatively to the weighted composite score:
 
 ```
-final = composite * duration_penalty * artifact_penalty * fad_penalty
+final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
 ```
 
 | Penalty | Formula |
@@ -222,6 +245,7 @@ final = composite * duration_penalty * artifact_penalty * fad_penalty
 | **Duration** | +/-20% tolerance = 1.0, linear decay to 0.0 at +/-50% deviation |
 | **Artifact** | Detects clipping, loops, discontinuities. Multiplier range 0--1. |
 | **FAD** | Sigmoid curve: midpoint=15, steepness=2, floor=0.5 |
+| **Fingerprint** | AcoustID known-song match. Multiplier 0.0--1.0 based on match score (threshold 0.80). |
 
 ### Anti-Gaming Measures
 
@@ -292,24 +316,24 @@ All synapse classes are defined in `tuneforge/base/protocol.py`.
 | `mood` | `str` | `""` | Target mood |
 | `tempo_bpm` | `int` | `120` | Desired BPM (20--300) |
 | `duration_seconds` | `float` | `10.0` | Desired duration in seconds (1--180) |
-| `key_signature` | `str \| None` | `None` | Musical key signature |
-| `time_signature` | `str \| None` | `None` | Time signature |
-| `instruments` | `list[str] \| None` | `None` | Preferred instruments |
-| `reference_audio` | `str \| None` | `None` | Base64-encoded reference audio |
-| `seed` | `int \| None` | `None` | Random seed for reproducibility |
+| `key_signature` | `str | None` | `None` | Musical key signature |
+| `time_signature` | `str | None` | `None` | Time signature |
+| `instruments` | `list[str] | None` | `None` | Preferred instruments |
+| `reference_audio` | `str | None` | `None` | Base64-encoded reference audio |
+| `seed` | `int | None` | `None` | Random seed for reproducibility |
 | `challenge_id` | `str` | `""` | Unique challenge ID |
-| `lyrics` | `str \| None` | `None` | Lyrics text for vocal generation |
+| `lyrics` | `str | None` | `None` | Lyrics text for vocal generation |
 | `vocals_requested` | `bool` | `False` | Whether vocals are requested |
-| `is_organic` | `bool` | `False` | Organic query vs validator challenge |
+| `is_organic` | `bool` | `False` | Organic request vs validator challenge |
 
 **Response fields** (miner to validator):
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `audio_b64` | `str \| None` | `None` | Base64-encoded WAV audio |
-| `sample_rate` | `int \| None` | `None` | Sample rate in Hz |
-| `generation_time_ms` | `int \| None` | `None` | Generation time in milliseconds |
-| `model_id` | `str \| None` | `None` | Model identifier string |
+| `audio_b64` | `str | None` | `None` | Base64-encoded WAV audio |
+| `sample_rate` | `int | None` | `None` | Sample rate in Hz |
+| `generation_time_ms` | `int | None` | `None` | Generation time in milliseconds |
+| `model_id` | `str | None` | `None` | Model identifier string |
 
 **Hash fields:** `prompt`, `genre`, `mood`, `tempo_bpm`, `duration_seconds`, `challenge_id`
 
@@ -321,7 +345,7 @@ Used by validators to discover online miners and their capabilities before sendi
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version_check` | `str \| None` | Validator protocol version for compatibility check |
+| `version_check` | `str | None` | Validator protocol version for compatibility check |
 
 **Response fields:**
 
@@ -593,7 +617,7 @@ The environment variables below control only **operational** parameters.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_VALIDATION_INTERVAL` | int | `300` | Seconds between validation rounds |
+| `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds |
 | `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Miners challenged per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
 
@@ -603,11 +627,12 @@ The environment variables below control only **operational** parameters.
 |----------|------|---------|-------------|
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between on-chain weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
-| `TF_EMA_STATE_PATH` | str | `None` | Path to persist EMA state across restarts |
+| `TF_EMA_STATE_PATH` | str | `./ema_state.json` | Path to persist EMA state across restarts |
 | `TF_EMA_SAVE_INTERVAL` | int | `5` | Rounds between EMA state saves |
 | `TF_PREFERENCE_MODEL_PATH` | str | `None` | Path to trained PreferenceHead checkpoint (.pt) |
 | `TF_FAD_REFERENCE_STATS_PATH` | str | `./reference_fad_stats.npz` | Path to FAD reference statistics |
-| `TF_VALIDATOR_PERTURBATION_SECRET` | str | -- | Private nonce for weight perturbation seed. Required for validators. Never shared with miners. |
+| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto-generated | Private nonce for weight perturbation seed. Required for validators. Never shared with miners. |
+| `TF_ACOUSTID_API_KEY` | str | `""` | AcoustID API key for fingerprint penalty (optional) |
 
 ### API / Server
 
@@ -615,6 +640,7 @@ The environment variables below control only **operational** parameters.
 |----------|------|---------|-------------|
 | `TF_API_HOST` | str | `0.0.0.0` | API server bind host |
 | `TF_API_PORT` | int | `8000` | API server port |
+| `TF_API_MAX_QUEUE_SIZE` | int | `100` | Max pending API requests |
 | `TF_STORAGE_PATH` | str | `./storage` | Local storage path for snapshots and audio |
 | `TF_FRONTEND_URL` | str | `http://localhost:3000` | Frontend URL (used for CORS) |
 | `TF_VALIDATOR_API_URL` | str | `""` | Platform API base URL for validator data push |
@@ -769,7 +795,7 @@ Eight endpoints under `/annotations/`: task listing, voting, statistics, export,
 pytest tests/
 ```
 
-Tests use `pytest-asyncio` in auto mode. Coverage reporting is available via `pytest-cov`. Current status: 436 tests passing, 0 failures.
+Tests use `pytest-asyncio` in auto mode. Coverage reporting is available via `pytest-cov`.
 
 ### Adding a New Scorer
 
@@ -796,10 +822,9 @@ There are no per-scorer environment variables. All weights are hardcoded constan
 | Timbral naturalness | `tuneforge/scoring/timbral_naturalness.py` |
 | Mix separation | `tuneforge/scoring/mix_separation.py` |
 | Learned MOS | `tuneforge/scoring/learned_mos.py` |
-| Perceptual quality | `tuneforge/scoring/perceptual_quality.py` |
-| Neural codec (EnCodec) | `tuneforge/scoring/neural_codec_quality.py` |
 | Diversity | `tuneforge/scoring/diversity.py` |
 | Attribute verifier | `tuneforge/scoring/attribute_verifier.py` |
+| Fingerprint scorer | `tuneforge/scoring/fingerprint_scorer.py` |
 | FAD scorer | `tuneforge/scoring/fad_scorer.py` |
 | Artifact detection | `tuneforge/scoring/artifact_detector.py` |
 | Stereo quality | `tuneforge/scoring/stereo_quality.py` |
@@ -828,7 +853,7 @@ There are no per-scorer environment variables. All weights are hardcoded constan
 ```
 tuneforge/
   tuneforge/
-    __init__.py                          # VERSION, NETUID, constants
+    __init__.py                          # VERSION, NETUID, epoch/round constants
     settings.py                          # Pydantic-settings singleton (TF_ prefix)
     subnet_api.py                        # Subnet API interface
     base/
@@ -856,27 +881,26 @@ tuneforge/
       __init__.py
       reward.py                          # ProductionRewardModel (scoring orchestrator)
       scoring.py                         # Score aggregation
-      leaderboard.py                     # EMA leaderboard
+      leaderboard.py                     # EMA leaderboard with tiered weighting
       weight_setter.py                   # On-chain weight submission
     scoring/                             # 16 scorer modules + support modules
       __init__.py
-      clap_scorer.py                     # CLAP text-audio similarity (laion/larger_clap_music)
+      clap_scorer.py                     # CLAP text-audio similarity
       audio_quality.py                   # Classic audio quality sub-metrics
       musicality.py                      # Rhythmic and harmonic analysis
       production_quality.py              # Production quality
       melody_coherence.py                # Melodic coherence
-      neural_quality.py                  # MERT neural quality (m-a-p/MERT-v1-95M)
+      neural_quality.py                  # MERT neural quality
       preference_model.py               # Learned preference model
       structural_completeness.py         # Structural completeness
       vocal_quality.py                   # Vocal quality
       vocal_lyrics.py                    # Whisper-based lyrics intelligibility
-      timbral_naturalness.py             # Spectral envelope, harmonic decay, transients
-      mix_separation.py                  # Spectral clarity, frequency masking, spatial depth
-      learned_mos.py                     # Multi-resolution perceptual quality estimation
-      perceptual_quality.py              # Perceptual audio quality
-      neural_codec_quality.py            # EnCodec reconstruction quality
+      timbral_naturalness.py             # Spectral envelope, harmonic decay
+      mix_separation.py                  # Spectral clarity, frequency masking
+      learned_mos.py                     # Multi-resolution perceptual quality
       diversity.py                       # Output diversity (50-entry history)
       attribute_verifier.py              # Attribute verification
+      fingerprint_scorer.py              # AcoustID fingerprint penalty
       fad_scorer.py                      # Frechet Audio Distance
       artifact_detector.py               # Clipping, loops, discontinuities
       stereo_quality.py                  # Stereo quality analysis
@@ -885,7 +909,7 @@ tuneforge/
       genre_profiles.py                  # 9 genre families with weight adjustments
       multi_scale.py                     # Duration-based weight adjustment
       conditional_targets.py             # Prompt-derived quality targets
-      progressive_difficulty.py          # Network quality EMA -> challenge difficulty
+      progressive_difficulty.py          # Network quality EMA -> difficulty
       active_learner.py                  # Active learning pair selection
       annotator_reliability.py           # Per-annotator accuracy tracking
     validation/
@@ -897,7 +921,7 @@ tuneforge/
       server.py                          # FastAPI application
       models.py                          # Pydantic request/response models
       organic_router.py                  # Organic generation routing
-      validator_api.py                   # Organic generation API (runs inside validator)
+      validator_api.py                   # Organic generation API (inside validator)
       routes/
         __init__.py
         generate.py                      # Generation endpoints
@@ -925,7 +949,7 @@ tuneforge/
     setup.sh                             # Environment setup script
   tests/
     conftest.py                          # Test fixtures
-    test_*.py                            # 436 tests across all modules
+    test_*.py                            # Test modules
   alembic/                               # Database migrations
   docker-compose.yml                     # Docker service definitions
   ecosystem.config.js                    # PM2 process definitions
@@ -936,3 +960,9 @@ tuneforge/
   setup.py                              # Package setup
   min_compute.yml                        # Minimum compute requirements
 ```
+
+---
+
+## License
+
+TuneForge is released under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license. See the LICENSE file for details.

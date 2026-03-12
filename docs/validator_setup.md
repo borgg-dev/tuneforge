@@ -16,7 +16,7 @@ A TuneForge validator performs the following duties:
 6. **Maintains an EMA leaderboard** per miner, smoothing raw scores over time. EMA state is persisted to disk.
 7. **Applies tiered power-law weighting** where the top 10 miners share 80% of weight and the rest share 20%.
 8. **Submits normalized weights** to the Bittensor chain every 115 blocks.
-9. **Handles organic SaaS queries** by fan-out to top miners, scoring responses, and updating EMA.
+9. **Handles organic requests** by routing to a single top miner by EMA (no fan-out).
 10. **Optionally pushes round data** to the platform API (`TF_VALIDATOR_API_URL`).
 11. **Auto-updates the preference model** from the platform API (checks hourly, downloads if SHA256 changed).
 
@@ -84,22 +84,32 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_MODE` | str | `validator` | Runtime mode |
 | `TF_AXON_PORT` | int | None | Axon port |
 
-### Validation Timing and Batching
+### Epoch and Round Timing
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_VALIDATION_INTERVAL` | int | `300` | Seconds between validation rounds |
+| `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds within an epoch |
 | `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Number of miners to challenge per round |
 | `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
-| `TF_WEIGHT_SETTER_STEP` | int | `115` | Blocks between weight submissions |
+| `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
+
+Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 120s cooldown. Total epoch duration is 1140s (~19 minutes). These timing constants are defined in `tuneforge/__init__.py`:
+
+| Constant | Value |
+|----------|-------|
+| `MAX_ROUNDS_PER_EPOCH` | 4 |
+| `DEFAULT_ROUND_INTERVAL` | 240s |
+| `EPOCH_SYNC` | 60s |
+| `EPOCH_COOLDOWN` | 120s |
+| `DEFAULT_EPOCH_INTERVAL` | 1140s |
 
 ### EMA Persistence
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_EMA_STATE_PATH` | str | `./ema_state.json` | Path to persist EMA state |
-| `TF_EMA_SAVE_INTERVAL` | int | `5` | Save EMA state every N blocks |
+| `TF_EMA_SAVE_INTERVAL` | int | `5` | Save EMA state every N rounds |
 
 ### Models and Storage
 
@@ -108,6 +118,7 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_PREFERENCE_MODEL_PATH` | str | None | Path to a trained preference model |
 | `TF_FAD_REFERENCE_STATS_PATH` | str | `./reference_fad_stats.npz` | Path to FAD reference statistics |
 | `TF_STORAGE_PATH` | str | `./storage` | Storage directory for snapshots and audio |
+| `TF_ACOUSTID_API_KEY` | str | `""` | AcoustID API key for fingerprint penalty (optional) |
 
 ### Security
 
@@ -147,7 +158,7 @@ TF_SUBTENSOR_NETWORK=test
 TF_WALLET_NAME=default
 TF_WALLET_HOTKEY=default
 TF_MODE=validator
-TF_VALIDATION_INTERVAL=300
+TF_ROUND_INTERVAL=240
 TF_LOG_LEVEL=INFO
 ```
 
@@ -183,7 +194,7 @@ The `Dockerfile.validator` uses `python:3.11-slim` (no CUDA) and pre-downloads t
 
 ## The Scoring Pipeline
 
-Every validation round, the validator scores each miner response across 16 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
+Every round, the validator scores each miner response across 16 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
 
 ```
 final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
@@ -237,7 +248,7 @@ These are applied multiplicatively to the composite score after dimension scorin
 | **Duration** | Requested vs. actual duration mismatch | Within 20% tolerance: no penalty. Linear decay from 1.0 to 0.0 between 20% and 50% deviation. Beyond 50%: multiplier = 0.0. |
 | **Artifact** | Clipping, loops, spectral discontinuities, spectral holes | Multiplier on final score based on artifact severity. |
 | **FAD** | Per-miner Frechet Audio Distance | Sigmoid curve with midpoint=15, steepness=2, floor=0.5. Reference stats loaded from `TF_FAD_REFERENCE_STATS_PATH`. |
-| **Fingerprint** | Chromaprint dedup + AcoustID known-song match | Multiplier (0.0 - 1.0) based on fingerprint match score. |
+| **Fingerprint** | AcoustID known-song match | Multiplier 0.0--1.0 based on match score (threshold 0.80). Requires `TF_ACOUSTID_API_KEY`. |
 
 ### Hard-Zero Conditions
 
@@ -332,7 +343,11 @@ Key parameters (hardcoded):
 | EMA_ALPHA | 0.2 | Smoothing factor. Higher = more responsive to recent rounds. |
 | EMA_NEW_MINER_SEED | 0.0 | New miners start at 0.0 and build up from their first scored round. |
 
-EMA state is persisted to disk at the path specified by `TF_EMA_STATE_PATH` (default: `./ema_state.json`), saved every 5 blocks (`TF_EMA_SAVE_INTERVAL`). This means validator restarts do not lose EMA history.
+EMA state is persisted to disk at the path specified by `TF_EMA_STATE_PATH` (default: `./ema_state.json`), saved every 5 rounds (`TF_EMA_SAVE_INTERVAL`). This means validator restarts do not lose EMA history. The state file format is version 3 and includes per-UID hotkey tracking for UID recycling detection.
+
+### UID Recycling Detection
+
+Each time the metagraph syncs, the validator compares current hotkeys against previously stored values. When a UID's hotkey changes (indicating a new miner registered on that slot), its EMA and round count are reset to 0.0 so the new miner starts fresh. Stale UIDs no longer present in the metagraph are pruned from the leaderboard.
 
 ### Tiered Power-Law Weighting
 
@@ -359,35 +374,37 @@ Within each tier, weight is distributed proportionally to `ema ^ power`:
 | Rest (#11) | 0.60 | ~4.5% |
 | Rest (#20) | 0.40 | ~2.0% |
 
-The tier boundary creates a sharp incentive cliff: breaking into the top 10 provides roughly a 4x weight multiplier. This mirrors the organic query routing where only top-ranked miners receive real user requests. When fewer than 10 miners are active, all share 100% of the weight pool.
+The tier boundary creates a sharp incentive cliff: breaking into the top 10 provides roughly a 4x weight multiplier. When fewer than 10 miners are active, all share 100% of the weight pool.
 
 ### Weight Submission
 
-- Weights are submitted to the chain every 115 blocks (`TF_WEIGHT_SETTER_STEP`).
+- Weights are submitted to the chain every 115 blocks (`TF_WEIGHT_UPDATE_INTERVAL`).
 - All weights are normalized to sum to 1.0.
+- No coverage-gating is applied.
 - Uses `bt.utils.weight_utils.process_weights_for_netuid` for chain compatibility.
 - The validator waits for finalization and inclusion before proceeding.
 
 ---
 
-## Organic Generation
+## Organic Requests
 
 Organic requests from the SaaS backend are handled directly by the validator via its built-in HTTP API (port 8090 by default, controlled by `TF_ORGANIC_API_PORT`). Disable with `TF_ORGANIC_API_ENABLED=false`.
 
 The flow:
 
 1. SaaS backend sends a POST to the validator's `/organic/generate` endpoint.
-2. Validator selects the top miners by EMA using a composite miner selection strategy.
-3. Fan-out: the prompt is sent to K=3 miners concurrently.
-4. All valid responses pass through a quality gate using the same 16-scorer pipeline used for challenges.
-5. Scores update the EMA leaderboard (organic and challenge scores share the same EMA).
-6. The best result (by composite score) is returned to the SaaS backend.
+2. Validator selects a single miner by EMA using a weighted selection strategy. Only miners with EMA >= 0.45 (`MIN_EMA_THRESHOLD`) are eligible.
+3. The prompt is sent to the selected miner (120s timeout).
+4. On failure, the router falls back to the next-best available miner.
+5. The result is returned to the SaaS backend.
+
+Organic requests do **not** affect miner scores or weights. The challenge pipeline is the sole quality signal.
 
 Key design properties:
 
-- **Low latency**: top-K fan-out with quality gating keeps response time manageable.
-- **Coexistence**: organic requests run concurrently with challenge rounds on the same async event loop. Scoring models are protected by an asyncio lock, and CPU-bound scoring runs in a thread pool executor.
-- **Fair EMA**: organic scores feed the same EMA as challenges. Poor performance on organic requests lowers a miner's EMA just like a bad challenge round.
+- **No fan-out**: one miner per request to avoid wasting compute.
+- **Load-balanced**: miners are selected weighted by EMA score, with active request tracking to avoid overloading individual miners.
+- **Coexistence**: organic requests run concurrently with rounds on the same async event loop. Scoring models are protected by an asyncio lock, and CPU-bound scoring runs in a thread pool executor.
 
 ---
 
@@ -433,7 +450,7 @@ If scoring is slow, use a GPU for CLAP, MERT, and Whisper inference. Ensure `CUD
 
 ### EMA state lost after restart
 
-Ensure `TF_EMA_STATE_PATH` points to a persistent location (not a tmpfs). The default `./ema_state.json` saves to the working directory. EMA is saved every 5 blocks by default.
+Ensure `TF_EMA_STATE_PATH` points to a persistent location (not a tmpfs). The default `./ema_state.json` saves to the working directory. EMA is saved every 5 rounds by default. A `.bak` backup file is maintained alongside the primary state file.
 
 ### Preference model download fails
 
@@ -442,3 +459,9 @@ Check that `TF_VALIDATOR_API_URL` is set correctly and the platform API is reach
 ### FAD penalty too aggressive
 
 Ensure `TF_FAD_REFERENCE_STATS_PATH` points to a valid reference statistics file (`./reference_fad_stats.npz` by default). If the file is missing, the FAD penalty may not function correctly. The FAD penalty has a floor of 0.5, so it cannot reduce scores below half.
+
+---
+
+## License
+
+TuneForge is released under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.

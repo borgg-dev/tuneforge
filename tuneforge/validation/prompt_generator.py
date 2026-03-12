@@ -1,8 +1,9 @@
 """
 Prompt generator for TuneForge validation challenges.
 
-Produces randomised music generation challenges with coherent
+Produces deterministic, seeded music generation challenges with coherent
 genre/mood/tempo/instrument combinations for miner evaluation.
+Uses seeded random for reproducibility across validators.
 
 Uses expanded genre/mood/duration/template vocabulary with per-challenge
 creative constraints, producing 100,000+ unique combinations to make

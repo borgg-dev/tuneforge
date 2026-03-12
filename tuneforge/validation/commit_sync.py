@@ -107,20 +107,20 @@ class CommitSync:
                     data=str(sync_time),
                 )
                 logger.info(
-                    "✅ Commit succeeded on attempt {} (sync_time={})",
+                    "Commit succeeded on attempt {} (sync_time={})",
                     attempt, sync_time,
                 )
                 self._last_sync_time = sync_time
                 return True
             except Exception as exc:
                 logger.warning(
-                    "⚠️ Commit attempt {}/{} failed: {}",
+                    "Commit attempt {}/{} failed: {}",
                     attempt, COMMIT_MAX_RETRIES, exc,
                 )
                 if attempt < COMMIT_MAX_RETRIES:
                     time.sleep(1)
 
-        logger.error("❌ All commit attempts failed. Skipping round.")
+        logger.error("All commit attempts failed. Skipping round.")
         return False
 
     # ------------------------------------------------------------------
@@ -173,7 +173,7 @@ class CommitSync:
         self._active_count = len(active_uids)
 
         logger.info(
-            "🔍 Number of active validators = {} : {}",
+            "Number of active validators = {} : {}",
             self._active_count, active_uids,
         )
         return active_uids
@@ -330,7 +330,7 @@ class CommitSync:
 
         # Step 2: Wait for blockchain finality
         logger.info(
-            "⏳ Waiting {}s for blockchain finality...",
+            "Waiting {}s for blockchain finality...",
             COMMIT_FINALITY_WAIT,
         )
         end_time = time.time() + COMMIT_FINALITY_WAIT
@@ -342,7 +342,7 @@ class CommitSync:
             self._executor, self.fetch_active_validators, sync_time
         )
         if not active_uids:
-            logger.warning("❌ No active validators found — skipping round")
+            logger.warning("No active validators found — skipping round")
             return False
 
         return True

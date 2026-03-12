@@ -31,8 +31,9 @@ MIN_GENERATION_STAKE: float = 10_000.0
 class TuneForgeMiner(BaseMinerNeuron):
     """Full miner implementation for the TuneForge music generation subnet.
 
-    Loads a music generation model, responds to validator challenges
-    with generated audio, and reports capability/health information.
+    Loads a music generation model, responds to both validator challenges
+    and organic (product/API) requests with generated audio, and reports
+    capability/health information.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
