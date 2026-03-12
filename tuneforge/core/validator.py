@@ -725,7 +725,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
             logger.warning("[ORGANIC] No serving miners available")
             return []
 
-        # Quick health check — ping all candidates, keep only those alive
+        # Quick health check — ping all candidates, keep only those alive.
+        # This prevents waiting 90s for dead miners during generation.
         candidate_axons = [self.metagraph.axons[uid] for uid in miner_uids]
         try:
             ping_responses = await self.dendrite.forward(
@@ -734,17 +735,21 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 timeout=self.ORGANIC_PING_TIMEOUT,
                 deserialize=False,
             )
-            alive_uids = [
-                uid for uid, pr in zip(miner_uids, ping_responses)
-                if pr is not None and getattr(pr, "is_available", False)
-            ]
+            alive_uids = []
+            for uid, pr in zip(miner_uids, ping_responses):
+                if pr is not None and getattr(pr, "is_available", False):
+                    alive_uids.append(uid)
+                else:
+                    status = getattr(pr, "axon", None)
+                    code = getattr(status, "status_code", "?") if status else "None"
+                    logger.debug("[ORGANIC] Ping UID {} failed: status={}", uid, code)
         except Exception as exc:
             logger.warning("[ORGANIC] Ping health check failed ({}), using all candidates", exc)
             alive_uids = miner_uids
 
         if not alive_uids:
-            logger.warning("[ORGANIC] No miners responded to ping — trying all candidates anyway")
-            alive_uids = miner_uids
+            logger.warning("[ORGANIC] No miners responded to ping — no miners to query")
+            return []
 
         logger.info(
             "[ORGANIC] Querying {} alive miners (of {} candidates, {} serving) for request {}",
