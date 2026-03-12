@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  miner:
+    build:
+      context: .
+      dockerfile: Dockerfile.miner
+    container_name: tuneforge-miner
+    env_file: .env.miner
+    volumes:
+      - ./storage:/app/storage
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+    ports:
+      - "8091:8091"
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  validator:
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    container_name: tuneforge-validator
+    env_file: .env.validator
+    volumes:
+      - ./storage:/app/storage
+      - ~/.bittensor/wallets:/root/.bittensor/wallets:ro
+    ports:
+      - "8092:8092"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.miner
+    container_name: tuneforge-api
+    env_file: .env.miner
+    command: ["python", "-m", "uvicorn", "tuneforge.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./storage:/app/storage
+    ports:
+      - "8080:8000"
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tuneforge-postgres
+    environment:
+      POSTGRES_DB: tuneforge
+      POSTGRES_USER: tuneforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tuneforge_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tuneforge-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

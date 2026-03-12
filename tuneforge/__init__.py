@@ -1,0 +1,11 @@
+VERSION = "1.0.0"
+NETUID = 0  # Assigned on registration
+SPEC_VERSION = 1
+DEFAULT_GENERATION_TIMEOUT = 120
+DEFAULT_ROUND_INTERVAL = 240
+MAX_ROUNDS_PER_EPOCH = 4
+EPOCH_SYNC = 60  # seconds: commit-reveal + blockchain finality at epoch start
+EPOCH_COOLDOWN = 60  # seconds: sync buffer at epoch end
+# 60s commit-reveal + 4 rounds × 240s + 60s cooldown = 1080s
+DEFAULT_EPOCH_INTERVAL = EPOCH_SYNC + (MAX_ROUNDS_PER_EPOCH * DEFAULT_ROUND_INTERVAL) + EPOCH_COOLDOWN
+DEFAULT_WEIGHT_UPDATE_INTERVAL = 115
