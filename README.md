@@ -231,7 +231,7 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | 240 | Seconds between validation rounds |
-| `TF_EPOCH_INTERVAL` | int | 1140 | Seconds per epoch (sync + rounds + cooldown) |
+| `TF_EPOCH_INTERVAL` | int | 1080 | Seconds per epoch (sync + rounds + cooldown) |
 | `TF_WEIGHT_SETTER_STEP` | int | 115 | Blocks between weight submissions |
 | `TF_EMA_STATE_PATH` | str | ./ema_state.json | EMA persistence file |
 | `TF_EMA_SAVE_INTERVAL` | int | 5 | Blocks between EMA saves |

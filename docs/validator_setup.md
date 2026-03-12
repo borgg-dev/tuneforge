@@ -89,19 +89,19 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds within an epoch |
-| `TF_EPOCH_INTERVAL` | int | `1140` | Seconds per epoch (sync + rounds + cooldown) |
+| `TF_EPOCH_INTERVAL` | int | `1080` | Seconds per epoch (sync + rounds + cooldown) |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 
-Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 120s cooldown. Total epoch duration is 1140s (~19 minutes). These timing constants are defined in `tuneforge/__init__.py`:
+Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 60s cooldown. Total epoch duration is 1080s (~18 minutes). These timing constants are defined in `tuneforge/__init__.py`:
 
 | Constant | Value |
 |----------|-------|
 | `MAX_ROUNDS_PER_EPOCH` | 4 |
 | `DEFAULT_ROUND_INTERVAL` | 240s |
 | `EPOCH_SYNC` | 60s |
-| `EPOCH_COOLDOWN` | 120s |
-| `DEFAULT_EPOCH_INTERVAL` | 1140s |
+| `EPOCH_COOLDOWN` | 60s |
+| `DEFAULT_EPOCH_INTERVAL` | 1080s |
 
 ### EMA Persistence
 

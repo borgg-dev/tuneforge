@@ -76,7 +76,7 @@ flowchart TB
 The validation loop is organized into epochs. Each epoch contains a fixed sequence of phases:
 
 ```
-Epoch (1140s / ~19 min):
+Epoch (1080s / ~18 min):
   [1] Commit-reveal sync     60s   (EPOCH_SYNC)
   [2] Round 1               240s   (DEFAULT_ROUND_INTERVAL)
   [3] Round 2               240s
@@ -92,8 +92,8 @@ Key constants (defined in `tuneforge/__init__.py`):
 | `MAX_ROUNDS_PER_EPOCH` | 4 | Rounds per epoch |
 | `DEFAULT_ROUND_INTERVAL` | 240s | Time between rounds |
 | `EPOCH_SYNC` | 60s | Commit-reveal and blockchain finality at epoch start |
-| `EPOCH_COOLDOWN` | 120s | Sync buffer at epoch end |
-| `DEFAULT_EPOCH_INTERVAL` | 1140s (~19 min) | 60 + 4 x 240 + 120 |
+| `EPOCH_COOLDOWN` | 60s | Sync buffer at epoch end |
+| `DEFAULT_EPOCH_INTERVAL` | 1080s (~18 min) | 60 + 4 x 240 + 60 |
 | `DEFAULT_WEIGHT_UPDATE_INTERVAL` | 115 blocks | Frequency of on-chain weight submissions |
 
 ```mermaid
@@ -612,7 +612,7 @@ The environment variables below control only **operational** parameters.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between validation rounds |
-| `TF_EPOCH_INTERVAL` | int | `1140` | Seconds per epoch (sync + rounds + cooldown) |
+| `TF_EPOCH_INTERVAL` | int | `1080` | Seconds per epoch (sync + rounds + cooldown) |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between on-chain weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 | `TF_EMA_STATE_PATH` | str | `./ema_state.json` | Path to persist EMA state across restarts |
