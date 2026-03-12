@@ -990,10 +990,12 @@ class TuneForgeValidator(BaseValidatorNeuron):
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        # Fall back to all serving miners if none have EMA > 0
+        # Fall back to a random sample of serving miners if none have EMA > 0
         if not scored:
-            logger.warning("[ORGANIC] No miners with EMA > 0 — falling back to all {} serving", len(serving))
-            return serving[:k]
+            import random as _rng
+            sample = _rng.sample(serving, min(k, len(serving)))
+            logger.warning("[ORGANIC] No miners with EMA > 0 — falling back to random {} of {} serving", len(sample), len(serving))
+            return sample
 
         top_k = [uid for uid, _ in scored[:k]]
 
