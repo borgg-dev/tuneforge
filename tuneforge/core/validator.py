@@ -75,9 +75,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._scoring_lock = asyncio.Lock()
         self._scoring_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scorer")
 
-        # Rounds since last weight set — full rotation = active_validator_count rounds.
-        self._rounds_since_weight_set: int = 0
-
         # Multi-validator status tracking
         self._organic_active_count: int = 0
         self._is_challenge_scoring: bool = False
@@ -252,7 +249,11 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self.round_start_time = time.time()
         self.current_round += 1
 
-        logger.info(f"=== Validation round {self.current_round} ===")
+        miner_subset = self.get_miner_subset()
+        logger.info(
+            f"=== Validation round {self.current_round} "
+            f"for UIDs: {miner_subset} ==="
+        )
 
         # 0. Force metagraph resync to get fresh axon data
         # Run in executor — this is a synchronous chain call that would
@@ -489,7 +490,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
             for uid, reward in zip(valid_uids, rewards):
                 ema = self._leaderboard.get_ema(uid)
                 weight = self._leaderboard.get_weight(uid)
-                logger.info(
+                logger.debug(
                     f"  UID {uid}: reward={reward:.4f}, "
                     f"ema={ema:.4f}, weight={weight:.4f}"
                 )
@@ -503,7 +504,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         for uid in non_responding:
             self._leaderboard.update(uid, 0.0)
         if non_responding:
-            logger.info(f"Applied score=0.0 to {len(non_responding)} non-responding miners (of {len(miner_uids)} assigned)")
+            logger.debug(f"Applied score=0.0 to {len(non_responding)} non-responding miners (of {len(miner_uids)} assigned)")
 
         # 8. Save leaderboard snapshot for the organic query router
         try:
@@ -519,31 +520,17 @@ class TuneForgeValidator(BaseValidatorNeuron):
             except Exception as exc:
                 logger.warning(f"Failed to save EMA state: {exc}")
 
-        # 9. Set weights after full rotation (all subsets covered).
-        # With N active validators, each round covers 1/N of miners,
-        # so N rounds = one full rotation = complete coverage.
-        self._rounds_since_weight_set += 1
-        active_count = (
-            self._commit_sync.active_count if self._commit_sync else 1
-        )
-        coverage_complete = self._rounds_since_weight_set >= active_count
-        logger.info(
-            f"⚖️ Rotation progress: round {self._rounds_since_weight_set}"
-            f"/{active_count}"
-            f"{' — full rotation complete ✓' if coverage_complete else ''}"
-        )
-
-        # Run in executor — set_weights is a synchronous chain call
-        # (wait_for_finalization=True) that blocks for 10-20s.
+        # 9. Set weights (every 115 blocks, ~23 min).
+        # EMA smoothing handles partial coverage between rounds.
         if self._weight_setter is not None:
             try:
                 self._weight_setter.update_metagraph(self.metagraph)
                 weight_set = await loop.run_in_executor(
                     None, self._weight_setter.set_weights,
-                    self._leaderboard, coverage_complete,
+                    self._leaderboard,
                 )
                 if weight_set:
-                    self._rounds_since_weight_set = 0
+                    logger.info("🏁 Weights set on chain")
             except Exception as exc:
                 logger.error(f"Weight setting failed: {exc}")
 

@@ -221,17 +221,28 @@ class CommitSync:
         self,
         my_uid: int,
         all_miner_uids: list[int],
+        round_index: int = 0,
     ) -> Optional[list[int]]:
-        """Get this validator's assigned miner subset for the current round.
+        """Get this validator's assigned miner subset for a given round.
+
+        Within a single epoch, each validator runs N rounds (N = active
+        validators).  On round ``round_index``, the validator picks subset
+        ``(my_index + round_index) % N`` so that after N rounds every
+        validator has covered every miner exactly once.
 
         Prerequisites: commit_timestamp() and fetch_active_validators()
-        must have been called successfully this round.
+        must have been called successfully this epoch.
 
         IMPORTANT: The partitioning is computed over ALL neuron UIDs in the
         subnet (0..N-1), NOT the caller's miner list. This ensures all
         validators compute identical partitions even if their metagraph
         snapshots differ slightly. The caller's all_miner_uids is only used
         to filter the final subset (remove validators, offline miners, etc.).
+
+        Args:
+            my_uid: This validator's UID.
+            all_miner_uids: List of queryable miner UIDs (for filtering).
+            round_index: Round number within the epoch (0-based).
 
         Returns:
             List of miner UIDs assigned to this validator, or None if
@@ -267,46 +278,43 @@ class CommitSync:
 
         uid_to_idx = self._map_to_consecutive(self._active_validator_uids)
         my_index = uid_to_idx[my_uid]
-        my_raw_subset = subsets[my_index]
+        # Rotate subset selection by round_index so each round covers
+        # a different partition of miners.
+        rotated_index = (my_index + round_index) % self._active_count
+        my_raw_subset = subsets[rotated_index]
 
         # Filter to only UIDs that are actually queryable miners
         # (removes ourselves, other validators, empty slots, etc.)
         miner_set = set(all_miner_uids)
         my_subset = [uid for uid in my_raw_subset if uid in miner_set]
-
-        logger.info(
-            "🎯 Validator {} (index {}/{}) assigned {}/{} miners "
-            "(from {} canonical UIDs)",
-            my_uid, my_index, self._active_count,
-            len(my_subset), len(all_miner_uids), subnet_size,
-        )
         return my_subset
 
     # ------------------------------------------------------------------
-    # Combined flow: commit → wait → discover → partition
+    # Combined flow: commit → wait → discover (called once per epoch)
     # ------------------------------------------------------------------
 
-    async def sync_round(
+    async def sync_epoch(
         self,
         sync_time: int,
         my_uid: int,
         all_miner_uids: list[int],
         loop=None,
-    ) -> Optional[list[int]]:
-        """Execute the full commit-sync flow for one round.
+    ) -> bool:
+        """Execute the commit-sync flow at the start of an epoch.
 
         1. Commit the epoch-boundary timestamp to chain
         2. Wait for blockchain finality (so all validators' commits are visible)
         3. Query all commitments to discover active validators
-        4. Deterministically partition miners and return this validator's subset
+
+        After this succeeds, call ``get_miner_subset(my_uid, miners, round_index)``
+        to get this round's subset.
 
         Args:
             sync_time: The epoch-boundary timestamp. ALL validators must pass
                 the same value — the caller ensures this by only triggering
                 when ``int(time.time()) % epoch_length == 0``.
 
-        Returns miner subset on success, None on failure (caller should
-        skip the round).
+        Returns True on success, False on failure (caller should skip epoch).
         """
         import asyncio
 
@@ -318,7 +326,7 @@ class CommitSync:
             self._executor, self.commit_timestamp, sync_time
         )
         if not success:
-            return None
+            return False
 
         # Step 2: Wait for blockchain finality
         logger.info(
@@ -335,7 +343,6 @@ class CommitSync:
         )
         if not active_uids:
             logger.warning("❌ No active validators found — skipping round")
-            return None
+            return False
 
-        # Step 4: Partition
-        return self.get_miner_subset(my_uid, all_miner_uids)
+        return True

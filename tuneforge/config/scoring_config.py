@@ -216,7 +216,7 @@ ANNOTATOR_WEIGHTED_THRESHOLD: float = 0.6
 # ---------------------------------------------------------------------------
 
 # Timing / intervals (seconds or blocks)
-VALIDATION_INTERVAL: int = _env_int("TF_VALIDATION_INTERVAL", 300)
+ROUND_INTERVAL: int = _env_int("TF_ROUND_INTERVAL", 240)
 WEIGHT_UPDATE_INTERVAL: int = _env_int("TF_WEIGHT_UPDATE_INTERVAL", 115)
 METAGRAPH_SYNC_INTERVAL: int = _env_int("TF_METAGRAPH_SYNC_INTERVAL", 1200)
 

@@ -39,6 +39,7 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    neuron_type: str = "Miner"
 
     # Axon for receiving requests
     axon: bt.Axon | None = Field(default=None)

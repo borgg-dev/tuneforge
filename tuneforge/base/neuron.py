@@ -230,15 +230,25 @@ class BaseNeuron(ABC):
     # ------------------------------------------------------------------
 
     def log_status(self) -> None:
-        """Log current neuron status."""
+        """Log current neuron status with chain metrics."""
         try:
-            stake = self.settings.get_stake()
-        except Exception:
-            stake = 0.0
-        logger.info(
-            f"Status: UID={self.uid}, Block={self.block}, "
-            f"Step={self.step}, Stake={stake:.4f}"
-        )
+            m = self.metagraph
+            uid = self.uid
+            network = self.subtensor.network if self.subtensor else "unknown"
+            logger.info(
+                f"{self.neuron_type} running:: network: {network} | "
+                f"step: {self.step} | uid: {uid} | "
+                f"trust: {float(m.Tv[uid]):.3f} | "
+                f"stake: {float(m.S[uid]):.3f} | "
+                f"emission: {float(m.E[uid]):.3f} | "
+                f"consensus: {float(m.C[uid]):.5f} | "
+                f"incentive: {float(m.I[uid]):.5f}"
+            )
+        except Exception as exc:
+            logger.info(
+                f"Status: UID={self.uid}, Block={self.block}, Step={self.step} "
+                f"(metrics unavailable: {exc})"
+            )
 
     def __enter__(self):
         """Context manager entry."""

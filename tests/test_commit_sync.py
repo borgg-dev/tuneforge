@@ -13,7 +13,7 @@ Tests cover:
 5. Canonical-UID partitioning with miner filtering
 6. End-to-end multi-validator scenarios
 7. Edge cases and failure modes
-8. Async sync_round integration
+8. Async sync_epoch integration
 """
 
 import asyncio
@@ -97,9 +97,9 @@ class TestCommitTimestamp:
     def test_commit_success(self):
         cs = _make_commit_sync(my_uid=0)
         assert cs.commit_timestamp(sync_time=1710000000) is True
-        assert cs._subtensor.commit.call_count == 1
+        assert cs._subtensor.set_commitment.call_count == 1
         # Verify exact value committed
-        call_args = cs._subtensor.commit.call_args
+        call_args = cs._subtensor.set_commitment.call_args
         assert call_args.kwargs["data"] == "1710000000"
 
     def test_all_validators_commit_same_value(self):
@@ -109,22 +109,22 @@ class TestCommitTimestamp:
         for uid in [0, 5, 10]:
             cs = _make_commit_sync(my_uid=uid)
             cs.commit_timestamp(sync_time=sync_time)
-            call_args = cs._subtensor.commit.call_args
+            call_args = cs._subtensor.set_commitment.call_args
             committed_values.append(call_args.kwargs["data"])
 
         assert all(v == "1710000480" for v in committed_values)
 
     def test_commit_retries_on_failure(self):
         cs = _make_commit_sync(my_uid=0)
-        cs._subtensor.commit.side_effect = [Exception("err"), Exception("err"), None]
+        cs._subtensor.set_commitment.side_effect = [Exception("err"), Exception("err"), None]
         assert cs.commit_timestamp(sync_time=100) is True
-        assert cs._subtensor.commit.call_count == 3
+        assert cs._subtensor.set_commitment.call_count == 3
 
     def test_commit_all_retries_fail(self):
         cs = _make_commit_sync(my_uid=0)
-        cs._subtensor.commit.side_effect = Exception("permanent failure")
+        cs._subtensor.set_commitment.side_effect = Exception("permanent failure")
         assert cs.commit_timestamp(sync_time=100) is False
-        assert cs._subtensor.commit.call_count == COMMIT_MAX_RETRIES
+        assert cs._subtensor.set_commitment.call_count == COMMIT_MAX_RETRIES
 
     def test_commit_stores_sync_time(self):
         cs = _make_commit_sync(my_uid=0)
@@ -133,7 +133,7 @@ class TestCommitTimestamp:
 
     def test_commit_failure_does_not_update_sync_time(self):
         cs = _make_commit_sync(my_uid=0)
-        cs._subtensor.commit.side_effect = Exception("fail")
+        cs._subtensor.set_commitment.side_effect = Exception("fail")
         cs.commit_timestamp(sync_time=999)
         assert cs.last_sync_time is None
 
@@ -467,10 +467,10 @@ class TestEndToEnd:
 
 
 # ===========================================================================
-# 8. ASYNC SYNC_ROUND
+# 8. ASYNC SYNC_EPOCH
 # ===========================================================================
 
-class TestSyncRound:
+class TestSyncEpoch:
 
     @pytest.fixture
     def event_loop(self):
@@ -490,36 +490,39 @@ class TestSyncRound:
         }
 
         with patch("tuneforge.validation.commit_sync.COMMIT_FINALITY_WAIT", 0):
-            subset = event_loop.run_until_complete(
-                cs.sync_round(sync_time=sync_time, my_uid=0,
+            result = event_loop.run_until_complete(
+                cs.sync_epoch(sync_time=sync_time, my_uid=0,
                               all_miner_uids=miners, loop=event_loop)
             )
 
+        assert result is True
+        # After sync_epoch, get_miner_subset should work
+        subset = cs.get_miner_subset(my_uid=0, all_miner_uids=miners, round_index=0)
         assert subset is not None
         assert all(m in miners for m in subset)
         assert len(subset) > 0
 
-    def test_commit_failure_returns_none(self, event_loop):
+    def test_commit_failure_returns_false(self, event_loop):
         cs = _make_commit_sync(my_uid=0)
-        cs._subtensor.commit.side_effect = Exception("chain down")
+        cs._subtensor.set_commitment.side_effect = Exception("chain down")
 
         with patch("tuneforge.validation.commit_sync.COMMIT_FINALITY_WAIT", 0):
             result = event_loop.run_until_complete(
-                cs.sync_round(sync_time=100, my_uid=0,
+                cs.sync_epoch(sync_time=100, my_uid=0,
                               all_miner_uids=list(range(20)), loop=event_loop)
             )
-        assert result is None
+        assert result is False
 
-    def test_no_active_validators_returns_none(self, event_loop):
+    def test_no_active_validators_returns_false(self, event_loop):
         cs = _make_commit_sync(my_uid=0, validator_uids=[0])
         cs._subtensor.get_all_commitments.return_value = {}
 
         with patch("tuneforge.validation.commit_sync.COMMIT_FINALITY_WAIT", 0):
             result = event_loop.run_until_complete(
-                cs.sync_round(sync_time=100, my_uid=0,
+                cs.sync_epoch(sync_time=100, my_uid=0,
                               all_miner_uids=list(range(20)), loop=event_loop)
             )
-        assert result is None
+        assert result is False
 
 
 # ===========================================================================

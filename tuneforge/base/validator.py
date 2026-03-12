@@ -24,7 +24,7 @@ from tuneforge.base.neuron import BaseNeuron
 from tuneforge.base.protocol import PingSynapse
 from tuneforge.settings import Settings, get_settings
 from tuneforge.validation.commit_sync import CommitSync
-from tuneforge import DEFAULT_VALIDATION_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL
+from tuneforge import DEFAULT_ROUND_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL, MAX_ROUNDS_PER_EPOCH, EPOCH_SYNC
 
 
 class BaseValidatorNeuron(BaseModel, BaseNeuron):
@@ -36,6 +36,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    neuron_type: str = "Validator"
 
     # Settings (declared for Pydantic; lazy-loaded in BaseNeuron)
     settings: Settings | None = Field(default=None)
@@ -68,6 +69,9 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     _commit_sync: Optional[CommitSync] = None
     # Miner subset assigned by commit-sync for the current round (None = all)
     _current_round_subset: Optional[list[int]] = None
+    # Track last completed round to avoid re-running on slow iterations
+    _last_completed_round: int = -1
+    _last_completed_epoch: int = -1
 
     def __init__(self, settings: Settings | None = None, **kwargs):
         """Initialise the validator neuron."""
@@ -367,7 +371,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
 
             position = validator_uids.index(self.uid)
             n_validators = len(validator_uids)
-            base_interval = self.settings.validation_interval
+            base_interval = self.settings.round_interval
             offset = (position / n_validators) * base_interval
 
             logger.info(
@@ -400,94 +404,147 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
     async def _validation_loop(self) -> None:
         """Async validation loop with commit-sync permutation.
 
-        Epoch-aligned polling pattern:
-        - Poll every 1 second
-        - When ``current_time % epoch_length == 0``, ALL validators fire
-          simultaneously (same UTC second)
-        - Commit the timestamp → wait for finality → discover active
-          validators → partition miners → run round on assigned subset
+        Epoch timeline (all derived from the clock):
+        |-- epsilon --|-- 64 × round_interval --|-- epsilon --|
+          commit-        rounds 0..63              sync
+          reveal         (cycle N subsets)          buffer
 
-        This guarantees all validators commit the exact same value because
-        they all trigger on the same modulo boundary.
+        All validators agree on epoch boundaries via
+        ``time % epoch_interval == 0``.  Within an epoch, elapsed
+        time determines the current phase:
+        - elapsed < EPOCH_SYNC: commit-reveal phase
+        - EPOCH_SYNC <= elapsed < EPOCH_SYNC + 64*round_interval: round phase
+        - remainder: cooldown buffer (idle)
+
+        Round boundaries fire when
+        ``(elapsed - EPOCH_SYNC) % round_interval == 0``.
         """
-        epoch_length = self.settings.validation_interval
+        round_interval = self.settings.round_interval
+        epoch_interval = self.settings.epoch_interval
+        sync_duration = EPOCH_SYNC
 
-        from tuneforge.validation.commit_sync import COMMIT_FINALITY_WAIT
         from datetime import datetime, timezone
-        remaining = self._seconds_until_next_epoch(epoch_length)
+        remaining = self._seconds_until_next_epoch(epoch_interval)
         logger.info(
-            f"Validator is up and running, next round starting in ~{remaining}s... "
-            f"(epoch every {epoch_length}s)"
+            f"Validator is up and running, next epoch starting in ~{remaining}s... "
+            f"(epoch every {epoch_interval}s, round every {round_interval}s)"
         )
 
         loop = asyncio.get_event_loop()
         while self.is_running and not self.should_exit:
             try:
                 current_time = int(time.time())
+                epoch_start = current_time - (current_time % epoch_interval)
+                elapsed = current_time - epoch_start
 
-                if current_time % epoch_length != 0:
-                    await asyncio.sleep(1)
+                # --- Phase 1: Commit-reveal (first sync_duration seconds) ---
+                if elapsed < sync_duration:
+                    # Only commit once per epoch (at the very start)
+                    if (
+                        self._commit_sync is not None
+                        and self._commit_sync.last_sync_time != epoch_start
+                    ):
+                        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                        try:
+                            self._commit_sync.update_metagraph(self.metagraph)
+                            logger.info(
+                                f"📢 Starting new epoch at {now_utc} UTC."
+                            )
+                            logger.info(
+                                f"🐛 Committing Proof of Activity : {epoch_start}"
+                            )
+                            synced = await self._commit_sync.sync_epoch(
+                                sync_time=epoch_start,
+                                my_uid=self.uid,
+                                all_miner_uids=self.get_miner_uids(),
+                                loop=loop,
+                            )
+                            if not synced:
+                                logger.warning(
+                                    "❌ Commit-sync failed — skipping epoch"
+                                )
+                        except Exception as exc:
+                            logger.error("❌ Commit-sync failed: {}", exc)
+
+                    await asyncio.sleep(2)
                     continue
 
-                # --- Epoch boundary hit — all validators fire now ---
-                now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                logger.info(
-                    f"📢 Starting new round at {now_utc} UTC."
-                )
-                logger.info(
-                    f"🐛 Committing Proof of Activity : {current_time}"
-                )
-
-                self._current_round_subset = None
-
-                if self._commit_sync is not None:
-                    try:
-                        self._commit_sync.update_metagraph(self.metagraph)
+                # --- Phase 2: Rounds (after sync, every round_interval) ---
+                round_phase_elapsed = elapsed - sync_duration
+                if round_phase_elapsed >= 0:
+                    round_index = round_phase_elapsed // round_interval
+                    if (
+                        round_index < MAX_ROUNDS_PER_EPOCH
+                        and (round_index != self._last_completed_round
+                             or epoch_start != self._last_completed_epoch)
+                    ):
+                        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                        self._current_round_subset = None
                         all_miners = self.get_miner_uids()
 
-                        subset = await self._commit_sync.sync_round(
-                            sync_time=current_time,
-                            my_uid=self.uid,
-                            all_miner_uids=all_miners,
-                            loop=loop,
-                        )
-                        if subset is not None:
-                            self._current_round_subset = subset
+                        if self._commit_sync is not None:
                             active = self._commit_sync.active_count
-                            if subset:
+                            if active == 0:
+                                await asyncio.sleep(2)
+                                continue
+
+                            try:
+                                cycle_index = round_index % active
                                 logger.info(
-                                    f"🚀 Round ready: {len(subset)}/{len(all_miners)} miners "
-                                    f"assigned ({active} active validators)"
+                                    f"📢 Round {round_index + 1}/{MAX_ROUNDS_PER_EPOCH} "
+                                    f"(subset {cycle_index + 1}/{active}) "
+                                    f"at {now_utc} UTC."
                                 )
-                            else:
-                                logger.warning("📖 No miners assigned for this round.")
-                        else:
-                            logger.warning(
-                                "❌ Commit-sync returned None — skipping round"
+                                subset = self._commit_sync.get_miner_subset(
+                                    my_uid=self.uid,
+                                    all_miner_uids=all_miners,
+                                    round_index=cycle_index,
+                                )
+                                if subset is not None:
+                                    self._current_round_subset = subset
+                                else:
+                                    logger.warning(
+                                        "❌ get_miner_subset returned None — skipping round"
+                                    )
+                                    await asyncio.sleep(2)
+                                    continue
+                            except Exception as exc:
+                                logger.error("❌ Subset selection failed: {}", exc)
+                                await asyncio.sleep(2)
+                                continue
+
+                        # --- Run the validation round ---
+                        response_event = await self.run_validation_round()
+                        self.process_round_results(response_event)
+                        self._current_round_subset = None
+
+                        # Mark round as completed so we don't re-run it
+                        self._last_completed_round = round_index
+                        self._last_completed_epoch = epoch_start
+
+                        remaining_rounds = MAX_ROUNDS_PER_EPOCH - round_index - 1
+                        if remaining_rounds > 0:
+                            next_round = self._seconds_until_next_epoch(round_interval)
+                            logger.info(
+                                f"🎉 Next round in ~{next_round}s "
+                                f"({remaining_rounds} rounds left in epoch)..."
                             )
-                            await asyncio.sleep(2)  # avoid re-triggering same second
-                            continue
-                    except Exception as exc:
-                        logger.error("❌ Commit-sync failed — skipping round: {}", exc)
+                        else:
+                            cooldown_end = epoch_start + epoch_interval
+                            remaining_epoch = cooldown_end - int(time.time())
+                            logger.info(
+                                f"🏁 All {MAX_ROUNDS_PER_EPOCH} rounds complete. "
+                                f"Epoch cooldown ~{max(0, remaining_epoch)}s..."
+                            )
+
+                        await loop.run_in_executor(None, self.log_status)
+                        self.step += 1
+
                         await asyncio.sleep(2)
                         continue
 
-                # --- Run the validation round ---
-                response_event = await self.run_validation_round()
-                self.process_round_results(response_event)
-
-                self._current_round_subset = None
-
-                remaining = self._seconds_until_next_epoch(epoch_length)
-                logger.info(
-                    f"🎉 End of round, next round in ~{remaining}s..."
-                )
-
-                await loop.run_in_executor(None, self.log_status)
-                self.step += 1
-
-                # Sleep past this epoch second to avoid double-trigger
-                await asyncio.sleep(2)
+                # --- Phase 3: Sync buffer / idle ---
+                await asyncio.sleep(1)
 
             except asyncio.CancelledError:
                 break

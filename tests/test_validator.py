@@ -112,7 +112,7 @@ class TestChallengeStagger:
             permits[v] = True
         stub.metagraph.validator_permit = permits
 
-        stub.settings.validation_interval = interval
+        stub.settings.round_interval = interval
         stub.wallet.hotkey.ss58_address = f"5FakeHotkey{uid:04d}"
 
         # Bind real methods

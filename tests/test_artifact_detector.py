@@ -292,11 +292,13 @@ class TestSpectralHoles:
 class TestComposite:
     """Tests for the composite detect() method."""
 
-    def test_detect_returns_minimum_of_checks(self, detector, hard_clipped_audio):
-        """detect() should return the worst (minimum) of all per-check penalties."""
+    def test_detect_returns_geometric_mean(self, detector, hard_clipped_audio):
+        """detect() should return the geometric mean of floored per-check penalties."""
         detailed = detector.detect_detailed(hard_clipped_audio, SAMPLE_RATE)
         composite = detector.detect(hard_clipped_audio, SAMPLE_RATE)
-        assert composite == pytest.approx(min(detailed.values()), abs=1e-6)
+        vals = [max(v, 0.1) for v in detailed.values()]
+        expected = float(np.prod(vals) ** (1.0 / len(vals)))
+        assert composite == pytest.approx(expected, abs=1e-6)
 
     def test_all_clean_composite_high(self, detector, clean_complex):
         """Clean audio should yield a high composite score."""

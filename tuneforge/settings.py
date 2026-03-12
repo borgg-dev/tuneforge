@@ -14,7 +14,7 @@ import bittensor as bt
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
-from tuneforge import NETUID, DEFAULT_GENERATION_TIMEOUT, DEFAULT_VALIDATION_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL
+from tuneforge import NETUID, DEFAULT_GENERATION_TIMEOUT, DEFAULT_ROUND_INTERVAL, DEFAULT_EPOCH_INTERVAL, DEFAULT_WEIGHT_UPDATE_INTERVAL
 
 
 class Settings(BaseSettings):
@@ -107,9 +107,13 @@ class Settings(BaseSettings):
     )
 
     # Validation configuration
-    validation_interval: int = Field(
-        default=DEFAULT_VALIDATION_INTERVAL,
+    round_interval: int = Field(
+        default=DEFAULT_ROUND_INTERVAL,
         description="Seconds between validation rounds"
+    )
+    epoch_interval: int = Field(
+        default=DEFAULT_EPOCH_INTERVAL,
+        description="Seconds between epochs (must be a multiple of round_interval)"
     )
     challenge_batch_size: int = Field(
         default=8,

@@ -16,16 +16,12 @@ from tuneforge.rewards.leaderboard import MinerLeaderboard
 class WeightSetter:
     """Submit leaderboard weights to chain.
 
-    Supports coverage-gated weight setting for permutation mode:
-    weights are set at the end of the round that completes full miner
-    coverage (all miners scored at least once), subject to a minimum
-    block interval (don't set too early) and a maximum block interval
-    (don't wait forever if coverage is never reached).
+    Weights are set every MIN_BLOCK_INTERVAL blocks (~23 min).
+    EMA smoothing in the leaderboard handles partial miner coverage
+    between rounds — no need to wait for full rotation.
     """
 
-    # Block interval bounds
-    MIN_BLOCK_INTERVAL: int = 115   # ~23 min — never set sooner
-    MAX_BLOCK_INTERVAL: int = 690   # ~138 min — force set even without coverage
+    MIN_BLOCK_INTERVAL: int = 115  # ~23 min — never set sooner
 
     def __init__(
         self,
@@ -42,18 +38,8 @@ class WeightSetter:
         self._update_interval = update_interval
         self._last_update_block: int = 0
 
-    def should_update(self, coverage_complete: bool = False) -> bool:
-        """Check whether weights should be set now.
-
-        Args:
-            coverage_complete: True when the validator has scored every
-                miner at least once since the last weight set.
-
-        Logic:
-            - Always wait at least MIN_BLOCK_INTERVAL blocks.
-            - If coverage is complete AND min blocks elapsed → set now.
-            - If MAX_BLOCK_INTERVAL blocks elapsed → force set regardless.
-        """
+    def should_update(self) -> bool:
+        """Check whether enough blocks have elapsed to set weights."""
         try:
             current_block = self._subtensor.get_current_block()
             blocks_elapsed = current_block - self._last_update_block
@@ -61,42 +47,20 @@ class WeightSetter:
             logger.error(f"Block check failed: {exc}")
             return False
 
-        if blocks_elapsed < self.MIN_BLOCK_INTERVAL:
-            return False
-
-        if coverage_complete:
-            logger.info(
-                f"⚖️ Full miner coverage reached after {blocks_elapsed} blocks — setting weights"
-            )
-            return True
-
-        if blocks_elapsed >= self.MAX_BLOCK_INTERVAL:
-            logger.info(
-                f"⚖️ Max interval ({self.MAX_BLOCK_INTERVAL} blocks) reached — "
-                f"forcing weight set without full coverage"
-            )
-            return True
-
-        return False
+        return blocks_elapsed >= self.MIN_BLOCK_INTERVAL
 
     def update_metagraph(self, metagraph: bt.Metagraph) -> None:
         """Update the metagraph reference."""
         self._metagraph = metagraph
 
-    def set_weights(
-        self, leaderboard: MinerLeaderboard, coverage_complete: bool = False
-    ) -> bool:
+    def set_weights(self, leaderboard: MinerLeaderboard) -> bool:
         """
         Gather weights from leaderboard, normalise, and submit to chain.
-
-        Args:
-            leaderboard: The miner leaderboard with current scores.
-            coverage_complete: Whether full miner coverage has been reached.
 
         Returns:
             True if weights were successfully set on chain.
         """
-        if not self.should_update(coverage_complete=coverage_complete):
+        if not self.should_update():
             logger.debug("Weight update not due yet")
             return False
 
