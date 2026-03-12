@@ -347,11 +347,11 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                 app=api_app,
                 host="0.0.0.0",
                 port=port,
-                log_level="info",
+                log_level="warning",
                 access_log=False,
             )
             server = uvicorn.Server(config)
-            logger.info("Organic API server will start on port {}", port)
+            logger.info("Organic API server starting")
             return server
         except Exception as exc:
             logger.error("Failed to create organic API server: {}", exc)

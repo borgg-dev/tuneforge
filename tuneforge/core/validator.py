@@ -332,7 +332,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
         axons = [self.metagraph.axons[uid] for uid in miner_uids]
         for uid in miner_uids[:5]:
             ax = self.metagraph.axons[uid]
-            logger.debug(f"  UID {uid} axon: {ax.ip}:{ax.port} hotkey={ax.hotkey[:16]}...")
+            logger.debug(f"  UID {uid} axon: hotkey={ax.hotkey[:16]}... serving={ax.is_serving}")
         try:
             responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
                 axons=axons,

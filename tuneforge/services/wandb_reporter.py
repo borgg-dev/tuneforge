@@ -125,6 +125,10 @@ class WandbReporter:
                 config=config,
                 tags=tags,
                 resume="allow",
+                # Don't capture console output — it leaks ports,
+                # internal IPs, and other operational details to the
+                # public W&B dashboard.
+                settings=wandb.Settings(console="off"),
             )
 
             if self.wallet and hasattr(self.wallet, "hotkey") and run:
