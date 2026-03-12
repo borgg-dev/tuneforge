@@ -101,7 +101,7 @@ class CommitSync:
         """
         for attempt in range(1, COMMIT_MAX_RETRIES + 1):
             try:
-                self._subtensor.commit(
+                self._subtensor.set_commitment(
                     wallet=self._wallet,
                     netuid=self._netuid,
                     data=str(sync_time),

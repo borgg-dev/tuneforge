@@ -75,6 +75,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._scoring_lock = asyncio.Lock()
         self._scoring_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scorer")
 
+        # Rounds since last weight set — full rotation = active_validator_count rounds.
+        self._rounds_since_weight_set: int = 0
+
         # Multi-validator status tracking
         self._organic_active_count: int = 0
         self._is_challenge_scoring: bool = False
@@ -516,15 +519,31 @@ class TuneForgeValidator(BaseValidatorNeuron):
             except Exception as exc:
                 logger.warning(f"Failed to save EMA state: {exc}")
 
-        # 9. Set weights via weight setter
+        # 9. Set weights after full rotation (all subsets covered).
+        # With N active validators, each round covers 1/N of miners,
+        # so N rounds = one full rotation = complete coverage.
+        self._rounds_since_weight_set += 1
+        active_count = (
+            self._commit_sync.active_count if self._commit_sync else 1
+        )
+        coverage_complete = self._rounds_since_weight_set >= active_count
+        logger.info(
+            f"⚖️ Rotation progress: round {self._rounds_since_weight_set}"
+            f"/{active_count}"
+            f"{' — full rotation complete ✓' if coverage_complete else ''}"
+        )
+
         # Run in executor — set_weights is a synchronous chain call
         # (wait_for_finalization=True) that blocks for 10-20s.
         if self._weight_setter is not None:
             try:
                 self._weight_setter.update_metagraph(self.metagraph)
-                await loop.run_in_executor(
-                    None, self._weight_setter.set_weights, self._leaderboard
+                weight_set = await loop.run_in_executor(
+                    None, self._weight_setter.set_weights,
+                    self._leaderboard, coverage_complete,
                 )
+                if weight_set:
+                    self._rounds_since_weight_set = 0
             except Exception as exc:
                 logger.error(f"Weight setting failed: {exc}")
 
