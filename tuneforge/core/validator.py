@@ -322,7 +322,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 timeout=self.settings.generation_timeout,
                 deserialize=False,
             )
-            logger.info(f"Dendrite returned {len(responses)} responses")
+            logger.debug(f"Dendrite returned {len(responses)} responses")
         except Exception as exc:
             logger.error(f"Dendrite forward failed: {exc}")
             responses = []
