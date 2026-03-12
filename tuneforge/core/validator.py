@@ -529,8 +529,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                     None, self._weight_setter.set_weights,
                     self._leaderboard,
                 )
-                if weight_set:
-                    logger.info("🏁 Weights set on chain")
+                pass  # weight_set logged by WeightSetter
             except Exception as exc:
                 logger.error(f"Weight setting failed: {exc}")
 
@@ -992,8 +991,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
     def process_round_results(self, response_event: DendriteResponseEvent) -> None:
         """Process round results — scoring is done in run_validation_round."""
-        summary = response_event.summary()
-        logger.info(f"Round summary: {summary}")
+        pass  # scoring logged in run_validation_round
 
     async def forward(self) -> DendriteResponseEvent:
         """Execute one validation round (async entry point)."""
