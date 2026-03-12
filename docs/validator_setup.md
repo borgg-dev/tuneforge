@@ -89,6 +89,7 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds within an epoch |
+| `TF_EPOCH_INTERVAL` | int | `1140` | Seconds per epoch (sync + 4 rounds + cooldown) |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 

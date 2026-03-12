@@ -226,16 +226,12 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 | `TF_TOP_K` | int | 250 | Top-K sampling |
 | `TF_TOP_P` | float | 0.0 | Nucleus sampling (0 = disabled) |
 
-### Validation
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_ROUND_INTERVAL` | int | 240 | Seconds between validation rounds |
-
 ### Operational
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `TF_ROUND_INTERVAL` | int | 240 | Seconds between validation rounds |
+| `TF_EPOCH_INTERVAL` | int | 1140 | Seconds per epoch (sync + 4 rounds + cooldown) |
 | `TF_WEIGHT_SETTER_STEP` | int | 115 | Blocks between weight submissions |
 | `TF_EMA_STATE_PATH` | str | ./ema_state.json | EMA persistence file |
 | `TF_EMA_SAVE_INTERVAL` | int | 5 | Blocks between EMA saves |
