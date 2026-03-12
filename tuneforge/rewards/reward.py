@@ -57,6 +57,7 @@ Anti-gaming:
 import io
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
 import numpy as np
 from loguru import logger
@@ -98,6 +99,43 @@ from tuneforge.scoring.vocal_lyrics import VocalLyricsScorer
 from tuneforge.settings import Settings
 
 
+@dataclass
+class ScoringBreakdown:
+    """Per-miner scoring breakdown for W&B logging and transparency."""
+    uid: int = 0
+    hotkey: str = ""
+    # 16 scorer outputs (0.0-1.0)
+    clap: float = 0.0
+    attribute: float = 0.0
+    musicality: float = 0.0
+    melody: float = 0.0
+    structural: float = 0.0
+    production: float = 0.0
+    neural_quality: float = 0.0
+    vocal: float = 0.0
+    quality: float = 0.0
+    preference: float = 0.0
+    vocal_lyrics: float = 0.0
+    timbral: float = 0.0
+    mix_separation: float = 0.0
+    learned_mos: float = 0.0
+    diversity: float = 0.0
+    speed: float = 0.0
+    # 4 penalty multipliers (0.0-1.0, 1.0 = no penalty)
+    duration_penalty: float = 1.0
+    artifact_penalty: float = 1.0
+    fad_penalty: float = 1.0
+    fingerprint_penalty: float = 1.0
+    # Final scores
+    composite: float = 0.0
+    final_reward: float = 0.0
+
+    def to_dict(self) -> dict:
+        """Flat dict for W&B table rows."""
+        from dataclasses import asdict
+        return asdict(self)
+
+
 class ProductionRewardModel:
     """Full scoring pipeline combining all signal sources."""
 
@@ -136,6 +174,7 @@ class ProductionRewardModel:
             acoustid_api_key=getattr(config, "acoustid_api_key", "") or "",
         )
         self._config = config
+        self._last_breakdowns: list[ScoringBreakdown] = []
         logger.info("ProductionRewardModel initialised (16 scorers + 4 penalties + multi-scale)")
 
     # ------------------------------------------------------------------
@@ -426,9 +465,11 @@ class ProductionRewardModel:
 
         # Combine phases and compute final scores
         rewards: list[float] = []
+        breakdowns: list[ScoringBreakdown] = []
         for i, synapse in enumerate(synapses):
             if gpu_scores[i] is None or cpu_scores.get(i) is None:
                 rewards.append(0.0)
+                breakdowns.append(ScoringBreakdown(final_reward=0.0))
                 continue
 
             gs = gpu_scores[i]
@@ -495,6 +536,31 @@ class ProductionRewardModel:
                 0.0, 1.0,
             ))
 
+            breakdowns.append(ScoringBreakdown(
+                clap=gs["clap"],
+                attribute=gs["attribute"],
+                neural_quality=gs["neural"],
+                preference=gs["preference"],
+                quality=cs["quality"],
+                musicality=cs["musicality"],
+                production=cs["production"],
+                melody=cs["melody"],
+                structural=cs["structural"],
+                vocal=cs["vocal"],
+                vocal_lyrics=cs["vocal_lyrics"],
+                timbral=cs["timbral"],
+                mix_separation=cs["mix_sep"],
+                learned_mos=cs["mos"],
+                diversity=diversity_scores[i],
+                speed=speed_score,
+                duration_penalty=cs["duration_penalty"],
+                artifact_penalty=cs["artifact_penalty"],
+                fad_penalty=gs["fad_penalty"],
+                fingerprint_penalty=cs["fingerprint_penalty"],
+                composite=float(composite),
+                final_reward=final,
+            ))
+
             logger.debug(
                 f"UID scoring: clap={gs['clap']:.3f} quality={cs['quality']:.3f} "
                 f"musicality={cs['musicality']:.3f} production={cs['production']:.3f} "
@@ -516,6 +582,7 @@ class ProductionRewardModel:
         # current round's embedding does not inflate its own diversity score.
         self._diversity.update_history(synapses, miner_hotkeys)
 
+        self._last_breakdowns = breakdowns
         return rewards
 
     def score_batch_organic(
