@@ -101,6 +101,9 @@ class TuneForgeValidator(BaseValidatorNeuron):
         self._seen_organic_ids: dict[str, None] = {}  # ordered dedup (insertion-order dict)
         self._seen_organic_ids_max = 10_000
 
+        # Eagerly load GPU scoring models so first request isn't slow
+        self._reward_model.warmup()
+
         logger.info("TuneForgeValidator initialised")
 
     # ------------------------------------------------------------------

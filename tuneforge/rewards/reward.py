@@ -177,6 +177,30 @@ class ProductionRewardModel:
         self._last_breakdowns: list[ScoringBreakdown] = []
         logger.info("ProductionRewardModel initialised (16 scorers + 4 penalties + multi-scale)")
 
+    def warmup(self) -> None:
+        """Eagerly load GPU-accelerated scoring models (CLAP, MERT, Whisper).
+
+        Call once at startup so the first scoring request doesn't pay
+        the model-loading penalty (~10-15s).
+        """
+        logger.info("Warming up scoring models...")
+        try:
+            self._clap._load()
+            logger.info("  CLAP loaded")
+        except Exception as exc:
+            logger.warning("  CLAP warmup failed: {}", exc)
+        try:
+            self._neural._load()
+            logger.info("  MERT loaded")
+        except Exception as exc:
+            logger.warning("  MERT warmup failed: {}", exc)
+        try:
+            self._vocal_lyrics._load_whisper()
+            logger.info("  Whisper loaded")
+        except Exception as exc:
+            logger.warning("  Whisper warmup failed: {}", exc)
+        logger.info("Scoring model warmup complete")
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
