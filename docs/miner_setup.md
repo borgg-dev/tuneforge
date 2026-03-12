@@ -20,28 +20,57 @@ A TuneForge miner performs the following:
 
 ## Hardware Requirements
 
-Minimum hardware specifications (from `min_compute.yml`):
+### Recommended Setups by Model
 
-| Resource | Minimum |
-|----------|---------|
-| GPU | NVIDIA, 16 GB VRAM |
-| Recommended GPU | RTX 4090 / A100 |
-| CPU Cores | 8 |
-| RAM | 32 GB |
-| Disk | 100 GB SSD |
-| Network | 100 Mbps up/down |
+| Setup | GPU | VRAM | CPU | RAM | Disk | Best For |
+|-------|-----|------|-----|-----|------|----------|
+| **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | Default baseline, highest quality from MusicGen family |
+| **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
+| **Budget (Stable Audio / ACE-Step)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
+| **Entry (MusicGen Small)** | RTX 3060 | 6 GB | 4 cores | 16 GB | 30 GB SSD | Testing and development only |
+
+**Network:** 50 Mbps up/down minimum. The miner must be reachable from the internet on its axon port.
 
 ### Baseline Model VRAM Usage
 
-| Model | `TF_MODEL_NAME` | VRAM | Sample Rate |
-|-------|-----------------|------|-------------|
-| **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | 32 kHz mono |
-| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | 44.1 kHz stereo (gated -- requires HF login) |
-| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | 32 kHz mono |
-| MusicGen Small | `facebook/musicgen-small` | ~4 GB | 32 kHz mono |
-| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | 48 kHz stereo |
+| Model | `TF_MODEL_NAME` | VRAM (fp16) | Speed (30s audio) | Sample Rate | Notes |
+|-------|-----------------|-------------|--------------------| ------------|-------|
+| **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | Best baseline quality, 3.3B params |
+| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | ~10-20s on 4090 | 44.1 kHz stereo | High-fidelity stereo, gated (requires HF login) |
+| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | ~10-15s on 4090 | 48 kHz stereo | Diffusion-based, vocal support |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
+| MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only |
 
 These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more TAO.
+
+### Disk Space Breakdown
+
+| Component | Size | Notes |
+|-----------|------|-------|
+| Python packages + PyTorch + CUDA | ~8 GB | Installed once |
+| MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
+| Stable Audio model weights | ~4 GB | Only if using Stable Audio |
+| ACE-Step checkpoints | ~9.5 GB | Only if using ACE-Step |
+| OS + system packages | ~4-5 GB | Depends on base image |
+| Logs, temp files, headroom | ~5 GB | Recommended buffer |
+
+50 GB is sufficient for any single model. If running multiple model backends, increase to 80 GB.
+
+### Deployment Options
+
+**VPS or bare-metal (simplest):** Your machine has a public IP. Set `TF_AXON_PORT` and ensure the port is open in your firewall. No additional configuration needed.
+
+**Docker / Vast.ai / NAT:** Your process runs behind a port mapping layer. The internal port differs from the external port. Set these additional variables so the axon registers the correct public address on-chain:
+
+```bash
+TF_AXON_PORT=8080                   # Port the process listens on inside the container
+TF_AXON_EXTERNAL_PORT=15822         # Public-facing port (e.g., Vast.ai mapped port)
+TF_AXON_EXTERNAL_IP=203.0.113.10   # Your public IP
+```
+
+Without `TF_AXON_EXTERNAL_PORT` and `TF_AXON_EXTERNAL_IP`, other nodes will try to connect to the internal container port and fail.
+
+> **Vast.ai note:** Vast.ai runs Caddy, TensorBoard, and Jupyter on some mapped ports by default. You may need to stop these services and reclaim the ports for your miner. Disable them via `supervisorctl stop tensorboard jupyter` and set `autostart=false` in their supervisor config files under `/etc/supervisor/conf.d/`.
 
 ---
 
@@ -159,6 +188,8 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 | `TF_NEURON_EPOCH_LENGTH` | int | `100` | Blocks between epochs |
 | `TF_NEURON_TIMEOUT` | int | `120` | Forward timeout in seconds |
 | `TF_AXON_PORT` | int | None | Axon serving port |
+| `TF_AXON_EXTERNAL_PORT` | int | None | Public-facing port for Docker/NAT setups |
+| `TF_AXON_EXTERNAL_IP` | str | None | Public IP for Docker/NAT setups |
 | `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum audio duration in seconds |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |

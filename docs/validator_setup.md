@@ -30,17 +30,67 @@ python -m neurons.validator --env-file .env.validator
 
 ## Hardware Requirements
 
-These values come from `min_compute.yml`.
+### Recommended Setups
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| CPU cores | 4 | 4+ |
-| RAM | 16 GB | 16 GB |
-| Disk | 50 GB SSD | 50 GB SSD |
-| Network | 50 Mbps up/down | 50 Mbps up/down |
-| GPU | Optional | 8 GB+ VRAM for fast CLAP/MERT scoring |
+| Setup | GPU | CPU | RAM | Disk | Scoring Time (10 miners) | Notes |
+|-------|-----|-----|-----|------|--------------------------|-------|
+| **GPU (recommended)** | RTX 3060+ (8 GB VRAM) | 4+ cores | 16 GB | 50 GB SSD | ~30-60s | CLAP, MERT, Whisper run on GPU — fits comfortably within the 240s round interval |
+| **CPU-only** | None | 8+ cores | 32 GB | 50 GB SSD | ~120-180s | All scoring models on CPU — tight but feasible within the 240s round interval |
 
-A GPU is not required but significantly reduces scoring latency for the CLAP, MERT, and Whisper models.
+**Network:** 50 Mbps up/down minimum. The validator must be reachable on its axon port and needs stable connectivity to the Bittensor chain.
+
+### GPU vs. CPU Scoring
+
+The validator runs 16 scoring models per miner per round. Three of these models (CLAP, MERT, Whisper) are neural networks that benefit significantly from GPU acceleration:
+
+| Scoring Model | GPU Time (per miner) | CPU Time (per miner) | VRAM |
+|---------------|----------------------|----------------------|------|
+| CLAP (text-audio similarity) | ~1-2s | ~5-10s | ~2.5 GB |
+| MERT (neural quality) | ~1-2s | ~5-10s | ~1 GB |
+| Whisper (vocal/lyrics) | ~2-3s | ~10-15s | ~1.5 GB |
+| Other 13 scorers (librosa-based) | ~5-10s | ~5-10s | None (CPU-only) |
+| **Total per miner** | **~10-15s** | **~25-45s** | **~5 GB** |
+
+With 10 miners per round and a 240-second round interval, GPU scoring leaves plenty of headroom. CPU-only scoring is feasible but leaves little margin — if the subnet grows beyond ~15 active miners, CPU-only validators may not finish scoring in time.
+
+**Recommendation:** Use a GPU if available. An 8 GB VRAM card (e.g., RTX 3060, T4) is sufficient — the validator does not run generation models, only scoring models. If you're already running a miner on the same machine, the scoring models share GPU memory alongside the generation model (total ~21 GB for MusicGen Large + scoring).
+
+### Running Miner + Validator on One GPU
+
+A single RTX 4090 (24 GB VRAM) can run both a MusicGen Large miner (~16 GB) and the validator scoring models (~5 GB) simultaneously. The miner generates audio during the round, then the validator scores it — the peak VRAM usage is ~21 GB since generation and scoring don't overlap.
+
+For GPUs with less VRAM (16 GB), use a lighter miner model (Stable Audio ~6 GB or ACE-Step ~6 GB) alongside the validator (~5 GB) for a total of ~11 GB.
+
+### Disk Space Breakdown
+
+| Component | Size | Notes |
+|-----------|------|-------|
+| Python packages + PyTorch + CUDA | ~8 GB | Installed once |
+| CLAP model | ~2.5 GB | Downloaded on first run |
+| MERT model | ~0.5 GB | Downloaded on first run |
+| Whisper model | ~1.5 GB | Downloaded on first run |
+| OS + system packages | ~4-5 GB | Depends on base image |
+| EMA state, logs, W&B data | ~1 GB | Grows slowly over time |
+| Audio storage (if no platform API) | ~5 GB/day | Cleaned automatically if using cron; not needed if `TF_VALIDATOR_API_URL` is set |
+| Headroom | ~5 GB | Recommended buffer |
+
+50 GB is sufficient. If also running a miner on the same machine, add the miner's model storage (see [Miner Setup Guide](miner_setup.md#disk-space-breakdown)).
+
+### Deployment Options
+
+**VPS or bare-metal (simplest):** Your machine has a public IP. Set `TF_AXON_PORT` and ensure the port is open in your firewall. No additional configuration needed.
+
+**Docker / Vast.ai / NAT:** Your process runs behind a port mapping layer. Set these additional variables so the axon registers the correct public address on-chain:
+
+```bash
+TF_AXON_PORT=18384                  # Port the process listens on inside the container
+TF_AXON_EXTERNAL_PORT=15941         # Public-facing port (e.g., Vast.ai mapped port)
+TF_AXON_EXTERNAL_IP=203.0.113.10   # Your public IP
+```
+
+If running the organic API behind a reverse proxy (e.g., Caddy on Vast.ai), set `TF_ORGANIC_API_PORT` to the internal port that the proxy forwards to.
+
+> **Vast.ai note:** Vast.ai runs Caddy, TensorBoard, and Jupyter on some mapped ports by default. You may need to stop these services and reclaim the ports. Disable them via `supervisorctl stop tensorboard jupyter` and set `autostart=false` in their supervisor config files under `/etc/supervisor/conf.d/`. Caddy can be reconfigured to proxy without authentication by editing `/etc/Caddyfile`.
 
 ---
 
@@ -83,6 +133,8 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | `TF_WALLET_PATH` | str | `~/.bittensor/wallets` | Path to wallet directory |
 | `TF_MODE` | str | `validator` | Runtime mode |
 | `TF_AXON_PORT` | int | None | Axon port |
+| `TF_AXON_EXTERNAL_PORT` | int | None | Public-facing port for Docker/NAT setups |
+| `TF_AXON_EXTERNAL_IP` | str | None | Public IP for Docker/NAT setups |
 
 ### Epoch and Round Timing
 
@@ -140,7 +192,8 @@ Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 60s co
 | `TF_LOG_LEVEL` | str | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `TF_LOG_DIR` | str | `/tmp/tuneforge` | Directory for log files |
 | `TF_WANDB_ENABLED` | bool | `false` | Enable Weights & Biases logging |
-| `TF_WANDB_ENTITY` | str | None | W&B entity (team or username) |
+| `TF_WANDB_API_KEY` | str | `""` | W&B API key for non-interactive auth |
+| `TF_WANDB_ENTITY` | str | `borgglab` | W&B entity (team or username) |
 | `TF_WANDB_PROJECT` | str | `tuneforge` | W&B project name |
 
 ### Minimal Example
