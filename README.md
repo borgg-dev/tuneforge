@@ -1,10 +1,26 @@
-# TuneForge
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/banner-light.png" />
+    <img alt="TuneForge" src="assets/brand/banner-light.png" width="420" />
+  </picture>
 
-**Decentralized AI Music Generation on Bittensor**
+  <p><strong>Decentralized AI Music Generation on Bittensor</strong></p>
 
-TuneForge is a Bittensor subnet where miners compete to generate music from text prompts. Validators issue challenges, score the returned audio across 16 quality signals with penalty multipliers, and set on-chain weights that determine TAO emissions. The scoring pipeline is model-agnostic -- it evaluates the audio, not the architecture. Miners ship with MusicGen Large and Stable Audio Open as baselines, but the ones earning real weight will be the ones who bring better models, fine-tune aggressively, or build something entirely new. An EMA leaderboard with tiered power-law weighting translates sustained quality into emissions.
+  <a href="#"><img src="https://img.shields.io/badge/python-3.10--3.12-blue" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-CC--BY--NC--4.0-green" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/bittensor-subnet-purple" /></a>
+  <br/>
 
-**Testnet netuid: 234** | **Mainnet: TBD**
+  <p>TuneForge is a Bittensor subnet where miners compete to generate music from text prompts.<br/>
+  Validators issue challenges, score the returned audio across 16 quality signals with penalty<br/>
+  multipliers, and set on-chain weights that determine TAO emissions. The scoring pipeline is<br/>
+  model-agnostic — it evaluates the audio, not the architecture. Miners ship with MusicGen Large<br/>
+  and Stable Audio Open as baselines, but the ones earning real weight will be the ones who bring<br/>
+  better models, fine-tune aggressively, or build something entirely new.</p>
+
+  <p><strong>Testnet netuid: 234</strong> · <strong>Mainnet: TBD</strong></p>
+</div>
 
 ---
 
@@ -30,7 +46,7 @@ The network runs in repeating validation rounds. Each round:
 
 4. **Update** -- Round scores feed into a per-miner EMA (alpha=0.2). Miners are ranked by EMA and split into two tiers: the top 10 share 80% of total weight, everyone else shares 20%. Within each tier, weight follows a quadratic power law. Weights are submitted on-chain every 115 blocks.
 
-5. **Organic (optional)** -- Real user requests from the SaaS platform flow through the validator, which fans them out to the top miners, scores all responses with the same pipeline, and returns the best result to the customer.
+5. **Organic** -- Real user requests from the SaaS platform flow through the validator, which routes them to top miners. Miners must handle organic requests the same way they handle challenges — there is no opt-out.
 
 ## Quick Start
 
