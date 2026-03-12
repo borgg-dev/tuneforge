@@ -426,8 +426,7 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
         from datetime import datetime, timezone
         remaining = self._seconds_until_next_epoch(epoch_interval)
         logger.info(
-            f"Validator is up and running, next epoch starting in ~{remaining}s... "
-            f"(epoch every {epoch_interval}s, round every {round_interval}s)"
+            f"Validator is up and running, next epoch starting in ~{remaining}s..."
         )
 
         loop = asyncio.get_event_loop()
