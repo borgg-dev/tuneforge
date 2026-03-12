@@ -1,6 +1,7 @@
 bittensor>=10.0.0
 torch>=2.4.0
 torchaudio>=2.4.0
+nnAudio>=0.3.0
 numpy>=2.0.1
 scipy>=1.11.0
 transformers>=4.51.0,<4.58.0
