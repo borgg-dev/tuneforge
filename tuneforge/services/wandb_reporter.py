@@ -153,6 +153,7 @@ class WandbReporter:
         uids: list[int],
         hotkeys: list[str],
         leaderboard: "MinerLeaderboard",
+        block: int = 0,
     ) -> None:
         """Log a complete scoring round to W&B.
 
@@ -165,6 +166,7 @@ class WandbReporter:
             uids: Miner UIDs aligned with breakdowns.
             hotkeys: Miner hotkeys aligned with breakdowns.
             leaderboard: Current leaderboard for EMA/weight data.
+            block: Current blockchain block number.
         """
         if not self.enabled:
             return
@@ -188,9 +190,11 @@ class WandbReporter:
                 if i < len(hotkeys):
                     bd.hotkey = hotkeys[i]
 
-            # 1. Round identity (cross-reference key for PostgreSQL)
+            # 1. Round identity and timing
             challenge_id = challenge.get("challenge_id", "")
             data["round/challenge_id"] = challenge_id
+            data["round/timestamp"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            data["round/block"] = block
 
             # 2. Round scores table
             table = self._build_round_table(breakdowns, leaderboard, challenge_id)

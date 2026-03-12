@@ -523,6 +523,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                         uids=valid_uids,
                         hotkeys=valid_hotkeys,
                         leaderboard=self._leaderboard,
+                        block=current_block,
                     )
                 except Exception as exc:
                     logger.debug(f"W&B round logging failed: {exc}")
