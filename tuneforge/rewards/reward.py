@@ -51,12 +51,9 @@ Vocals-requested boost: when synapse.vocals_requested is True, vocal_lyrics
 weight is doubled and vocal weight is 1.5x (then renormalized).
 
 Anti-gaming:
-- Per-round weight perturbation (±30%) with SECRET seed (auto-generated if not set)
-- Scorer dropout (10%)
 - Population-level diversity bonus
 """
 
-import hashlib
 import io
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,18 +64,15 @@ from loguru import logger
 from tuneforge.base.protocol import MusicGenerationSynapse
 from tuneforge.config.scoring_config import (
     SCORING_WEIGHTS,
-    SCORER_DROPOUT_RATE,
     SILENCE_THRESHOLD,
     DURATION_TOLERANCE,
     DURATION_TOLERANCE_MAX,
     GENERATION_TIMEOUT,
-    WEIGHT_PERTURBATION,
     FAD_WINDOW_SIZE,
     FAD_REFERENCE_STATS_PATH,
     FAD_PENALTY_MIDPOINT,
     FAD_PENALTY_STEEPNESS,
     FAD_PENALTY_FLOOR,
-    VALIDATOR_PERTURBATION_SECRET,
 )
 from tuneforge.scoring.artifact_detector import ArtifactDetector
 from tuneforge.scoring.fingerprint_scorer import FingerprintScorer
@@ -241,8 +235,7 @@ class ProductionRewardModel:
         duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
         scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
-        # --- Per-round weight perturbation (anti-gaming) ---
-        weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+        weights = dict(SCORING_WEIGHTS)
 
         # --- Preference weight: zero in bootstrap, auto-scale when trained ---
         if self._preference.is_bootstrap:
@@ -449,7 +442,7 @@ class ProductionRewardModel:
             duration_seconds = getattr(synapse, "duration_seconds", 10.0) or 10.0
             scale_multipliers = self._multi_scale.evaluate(audio, sr, duration_seconds)
 
-            weights = self._perturb_weights(challenge_id, VALIDATOR_PERTURBATION_SECRET)
+            weights = dict(SCORING_WEIGHTS)
 
             # Preference weight: zero in bootstrap, auto-scale when trained
             if self._preference.is_bootstrap:
@@ -544,7 +537,7 @@ class ProductionRewardModel:
         - Phase 2 (parallel): CPU scorers (production, musicality, vocal)
 
         Still applies duration_penalty and artifact_penalty as safety gates.
-        No anti-gaming perturbation, no FAD, no diversity (not needed for organic).
+        No FAD or diversity scoring (not needed for organic).
         """
         # Organic weights (renormalized to sum to 1.0)
         ORGANIC_WEIGHTS = {
@@ -781,50 +774,3 @@ class ProductionRewardModel:
         frac = (ratio - 3.0) / 3.0
         return 0.3 * (1.0 - frac)
 
-    @staticmethod
-    def _perturb_weights(challenge_id: str, validator_secret: str = "") -> dict[str, float]:
-        """
-        Per-round weight perturbation for anti-gaming.
-
-        Deterministic per (challenge_id + validator_secret), reproducible for
-        verification by the same validator but unpredictable to miners.
-        The validator_secret is a private nonce that is NEVER transmitted to
-        miners, preventing them from reconstructing the perturbed weights.
-
-        Each weight is perturbed by ±WEIGHT_PERTURBATION and the result is
-        renormalized to sum to 1.0.
-
-        Returns SCORING_WEIGHTS unchanged if perturbation is disabled.
-        """
-        if WEIGHT_PERTURBATION <= 0.0:
-            return dict(SCORING_WEIGHTS)
-        if not challenge_id:
-            logger.warning("Empty challenge_id — perturbation disabled for this round")
-            return dict(SCORING_WEIGHTS)
-
-        # Deterministic seed from challenge_id + validator secret
-        # The secret is never shared with miners, making weights unpredictable
-        seed_material = f"{challenge_id}:{validator_secret}" if validator_secret else challenge_id
-        seed = int(hashlib.sha256(seed_material.encode()).hexdigest()[:8], 16)
-        rng = np.random.RandomState(seed)
-
-        perturbed: dict[str, float] = {}
-        for key, base_weight in SCORING_WEIGHTS.items():
-            if base_weight == 0.0:
-                perturbed[key] = 0.0
-                continue
-            factor = 1.0 + rng.uniform(-WEIGHT_PERTURBATION, WEIGHT_PERTURBATION)
-            perturbed[key] = base_weight * factor
-
-        # Scorer dropout: each non-zero scorer has a chance of being zeroed
-        if SCORER_DROPOUT_RATE > 0:
-            for key in list(perturbed.keys()):
-                if perturbed[key] > 0 and rng.random() < SCORER_DROPOUT_RATE:
-                    perturbed[key] = 0.0
-
-        # Renormalize to sum to 1.0
-        total = sum(perturbed.values())
-        if total > 0:
-            perturbed = {k: v / total for k, v in perturbed.items()}
-
-        return perturbed

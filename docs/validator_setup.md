@@ -120,12 +120,6 @@ Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 120s c
 | `TF_STORAGE_PATH` | str | `./storage` | Storage directory for snapshots and audio |
 | `TF_ACOUSTID_API_KEY` | str | `""` | AcoustID API key for fingerprint penalty (optional) |
 
-### Security
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto-generated | Private nonce for weight perturbation seed. Never transmitted to miners. Auto-generated if not set, but set explicitly for reproducibility across restarts. |
-
 ### Platform API Integration
 
 | Variable | Type | Default | Description |
@@ -194,7 +188,7 @@ The `Dockerfile.validator` uses `python:3.11-slim` (no CUDA) and pre-downloads t
 
 ## The Scoring Pipeline
 
-Every round, the validator scores each miner response across 16 dimensions, applies 4 penalty multipliers, checks hard-zero conditions, and applies anti-gaming perturbation. The final score formula is:
+Every round, the validator scores each miner response across 16 dimensions, applies 4 penalty multipliers, and checks hard-zero conditions. The final score formula is:
 
 ```
 final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerprint_penalty
@@ -260,10 +254,6 @@ These override the final score to 0.0 regardless of dimension scores:
 | **Timeout** | Round-trip time exceeds 300 seconds |
 
 ### Anti-Gaming Measures
-
-**Weight Perturbation:** Each round, every non-zero scoring dimension weight receives a deterministic perturbation of up to +/-30%. The seed is computed as `SHA256(challenge_id + TF_VALIDATOR_PERTURBATION_SECRET)`. The secret is a private nonce that is never transmitted to miners. Without the secret, miners cannot reconstruct the perturbed weights from the open-source code. All weights are perturbed individually, then renormalized to sum to 1.0.
-
-**Scorer Dropout:** Each round, 10% of non-zero scorers are randomly dropped (their weight redistributed). This adds further unpredictability to the scoring pipeline.
 
 **Hardcoded Weights:** All scoring weights and thresholds are hardcoded in the source code, not configurable via environment variables. This ensures consensus across all validators.
 

@@ -172,10 +172,6 @@ Scoring weights shift based on audio duration:
 
 ## Anti-Gaming
 
-**Weight Perturbation.** Each round, scoring weights are randomly perturbed by up to 30%, seeded by `SHA256(challenge_id + validator_secret)`. The validator secret is a private nonce that never leaves the validator process. You cannot reconstruct the exact weights from the open-source code.
-
-**Scorer Dropout.** Each scorer has a 10% independent probability of being zeroed per round, using the same secret-seeded RNG. Optimizing for any single scorer is unreliable.
-
 **FAD Penalty.** Per-miner Frechet Audio Distance measures how far a miner's output distribution diverges from real music. Sigmoid penalty with a floor of 0.5.
 
 **Fingerprint Detection.** Chromaprint deduplication catches identical submissions. AcoustID lookup catches audio ripped from commercial recordings. Both apply as multipliers on the final score.
@@ -247,7 +243,7 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 | `TF_EMA_SAVE_INTERVAL` | int | 5 | Blocks between EMA saves |
 | `TF_FAD_REFERENCE_STATS_PATH` | str | ./reference_fad_stats.npz | FAD reference statistics |
 | `TF_PREFERENCE_MODEL_PATH` | str | None | Preference model checkpoint |
-| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto | Private nonce for weight perturbation seed |
+
 
 ### Organic API (Validator)
 

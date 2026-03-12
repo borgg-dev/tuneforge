@@ -161,17 +161,6 @@ MERT_EXPECTED_NORM: float = 25.0
 # ---------------------------------------------------------------------------
 LUFS_TOLERANCE: float = 4.0
 
-# ---------------------------------------------------------------------------
-# Weight perturbation (anti-gaming)
-# Per-round random ±30% adjustment to composite weights, seeded by
-# SHA256(challenge_id + validator_secret).
-# ---------------------------------------------------------------------------
-WEIGHT_PERTURBATION: float = 0.30
-
-# ---------------------------------------------------------------------------
-# Scorer dropout rate (anti-gaming)
-# ---------------------------------------------------------------------------
-SCORER_DROPOUT_RATE: float = 0.10
 
 # ---------------------------------------------------------------------------
 # FAD (Frechet Audio Distance) penalty parameters
@@ -237,24 +226,3 @@ ACTIVE_LEARNING_TOP_K: int = _env_int("TF_ACTIVE_LEARNING_TOP_K", 3)
 # Default guidance scale (miner-side, not consensus-critical)
 DEFAULT_GUIDANCE_SCALE: float = _env_float("TF_DEFAULT_GUIDANCE_SCALE", 3.0)
 
-# ---------------------------------------------------------------------------
-# Validator perturbation secret
-# A private nonce used to seed weight perturbation. MUST NOT be shared with
-# miners. Each validator should set a unique value. If empty, a random secret
-# is auto-generated at startup (ephemeral — changes on restart).
-# ---------------------------------------------------------------------------
-def _default_perturbation_secret() -> str:
-    """Auto-generate a random perturbation secret if none is configured."""
-    configured = os.environ.get("TF_VALIDATOR_PERTURBATION_SECRET", "")
-    if configured:
-        return configured
-    import secrets
-    generated = secrets.token_hex(32)
-    import logging
-    logging.getLogger("tuneforge.config").warning(
-        "TF_VALIDATOR_PERTURBATION_SECRET not set — auto-generated ephemeral secret. "
-        "Set this env var for consistent scoring across restarts."
-    )
-    return generated
-
-VALIDATOR_PERTURBATION_SECRET: str = _default_perturbation_secret()

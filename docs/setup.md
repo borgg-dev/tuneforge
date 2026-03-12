@@ -115,7 +115,7 @@ sequenceDiagram
     M->>D: Return base64 WAV in synapse
     D->>V: Collect responses
     V->>RM: score_batch(responses)
-    Note over RM: Decode audio, check hard penalties,<br/>compute 16 signals + 4 penalty multipliers,<br/>anti-gaming perturbation, weighted composite
+    Note over RM: Decode audio, check hard penalties,<br/>compute 16 signals + 4 penalty multipliers,<br/>weighted composite
     RM->>LB: update(scores)
     Note over LB: Apply EMA smoothing (alpha=0.2)
     LB->>LB: Save snapshot to storage/leaderboard.json
@@ -166,9 +166,7 @@ flowchart LR
     B -->|Timeout > 300s| Z
     B -->|Pass| C[16 Component Scores]
     C --> D[Multi-Scale Duration Adjustment]
-    D --> E[Per-Round Weight Perturbation +/-30%]
-    E --> F[Scorer Dropout 10%]
-    F --> G[Weighted Composite]
+    D --> G[Weighted Composite]
     G --> H[Duration Penalty Multiplier]
     H --> I[Artifact Penalty Multiplier]
     I --> J[FAD Penalty Multiplier]
@@ -251,8 +249,6 @@ final = composite * duration_penalty * artifact_penalty * fad_penalty * fingerpr
 
 All scoring parameters are **hardcoded for consensus** -- miners cannot reconstruct exact weights from the open-source code alone.
 
-- **Weight perturbation:** +/-30% per round. Seed = `SHA256(challenge_id + validator_secret)`. The `TF_VALIDATOR_PERTURBATION_SECRET` env var provides a private nonce that is never sent to miners.
-- **Scorer dropout:** 10% of scorers are randomly disabled each round.
 - **No configurable weight env vars:** All weights and thresholds are constants in `scoring_config.py`.
 
 ### Multi-Scale Duration Adjustment
@@ -296,8 +292,6 @@ Raw round scores are smoothed with exponential moving average:
 | Silence threshold (RMS) | 0.01 |
 | Timeout | 300 seconds |
 | Diversity history | 50 entries |
-| Perturbation range | +/-30% |
-| Scorer dropout | 10% |
 
 ---
 
@@ -631,7 +625,6 @@ The environment variables below control only **operational** parameters.
 | `TF_EMA_SAVE_INTERVAL` | int | `5` | Rounds between EMA state saves |
 | `TF_PREFERENCE_MODEL_PATH` | str | `None` | Path to trained PreferenceHead checkpoint (.pt) |
 | `TF_FAD_REFERENCE_STATS_PATH` | str | `./reference_fad_stats.npz` | Path to FAD reference statistics |
-| `TF_VALIDATOR_PERTURBATION_SECRET` | str | auto-generated | Private nonce for weight perturbation seed. Required for validators. Never shared with miners. |
 | `TF_ACOUSTID_API_KEY` | str | `""` | AcoustID API key for fingerprint penalty (optional) |
 
 ### API / Server
@@ -708,10 +701,6 @@ alembic revision --autogenerate -m "describe change"
 ---
 
 ## Security Model
-
-### Weight Perturbation Secret
-
-The `TF_VALIDATOR_PERTURBATION_SECRET` env var provides a private nonce used in the perturbation seed: `SHA256(challenge_id + validator_secret)`. This prevents miners from reconstructing the exact perturbed weight distribution from the open-source code. Each validator must set a unique secret.
 
 ### Validator Stake Filtering
 

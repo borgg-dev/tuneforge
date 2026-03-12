@@ -1,4 +1,4 @@
-"""Tests for EMA persistence, new miner seed, and scorer dropout."""
+"""Tests for EMA persistence and new miner seed."""
 
 import json
 
@@ -132,33 +132,6 @@ class TestEMAPersistence:
         lb2.update(50, 0.8)
         expected = 0.2 * 0.8 + 0.8 * 0.0  # 0.16
         assert abs(lb2.get_ema(50) - expected) < 1e-6
-
-    def test_scorer_dropout(self):
-        """Verify _perturb_weights can zero some scorers via dropout."""
-        from tuneforge.rewards.reward import ProductionRewardModel
-
-        # Run many perturbations and check that at least one key gets zeroed
-        found_dropout = False
-        for i in range(100):
-            challenge_id = f"test-dropout-{i}"
-            weights = ProductionRewardModel._perturb_weights(challenge_id)
-
-            # Count how many scorers are zero that were non-zero in base weights
-            from tuneforge.config.scoring_config import SCORING_WEIGHTS
-            dropped = [
-                k for k in SCORING_WEIGHTS
-                if SCORING_WEIGHTS[k] > 0 and weights.get(k, 0) == 0.0
-            ]
-            if dropped:
-                found_dropout = True
-                break
-
-        assert found_dropout, "Expected at least one scorer to be dropped across 100 trials"
-
-        # Weights should still sum to 1.0 (renormalized)
-        total = sum(weights.values())
-        if total > 0:
-            assert abs(total - 1.0) < 1e-6
 
     def test_version_mismatch_rejected(self, tmp_path):
         """State file with wrong version is rejected."""

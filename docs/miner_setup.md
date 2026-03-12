@@ -382,8 +382,6 @@ The system recognizes 9 genre families with per-genre quality targets:
 
 ### Anti-Gaming Measures
 
-- **Weight perturbation:** Scoring weights shift by up to 30% each round, seeded by `SHA256(challenge_id + validator_secret)`. The validator secret is never shared with miners.
-- **Scorer dropout:** 10% of non-zero scorers are randomly dropped each round.
 - **Hardcoded weights:** Scoring weights are not configurable via env vars, ensuring all validators score identically.
 
 ### Optimization Tips
