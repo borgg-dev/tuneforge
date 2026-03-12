@@ -5,7 +5,7 @@
     <img alt="TuneForge" src="assets/brand/banner-light.png" width="420" />
   </picture>
 
-  <p><strong>Decentralized AI Music Generation on Bittensor</strong></p>
+  <h3>Decentralized AI Music Generation on Bittensor</h3>
 
   <a href="#"><img src="https://img.shields.io/badge/python-3.10--3.12-blue" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-CC--BY--NC--4.0-green" /></a>
