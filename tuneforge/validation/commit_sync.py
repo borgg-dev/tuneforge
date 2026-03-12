@@ -29,7 +29,7 @@ COMMIT_TIMEOUT: float = 55.0
 # Number of commit retry attempts before giving up.
 COMMIT_MAX_RETRIES: int = 3
 
-# Minimum stake (TAO) for a validator to be considered active.
+# Minimum stake (α) for a validator to be considered active.
 # Validators below this threshold are ignored during active discovery.
 MIN_VALIDATOR_STAKE: float = 10_000.0
 

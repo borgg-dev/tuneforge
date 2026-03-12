@@ -698,7 +698,7 @@ alembic revision --autogenerate -m "describe change"
 
 ### Validator Stake Filtering
 
-Miners verify the caller's stake before accepting generation requests. The minimum required stake is 1000.0 TAO (`MIN_GENERATION_STAKE`). This prevents unauthorized nodes from extracting generations.
+Miners verify the caller's stake before accepting generation requests. The minimum required stake is 1000.0 α (`MIN_GENERATION_STAKE`). This prevents unauthorized nodes from extracting generations.
 
 ### Hotkey Authentication
 

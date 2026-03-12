@@ -1,6 +1,6 @@
 # TuneForge Miner Setup Guide
 
-This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns TAO rewards based on quality scores.
+This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns α (alpha) rewards based on quality scores.
 
 **The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Large and Stable Audio Open 1.0 are provided as baseline starting models, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
 
@@ -13,7 +13,7 @@ A TuneForge miner performs the following:
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
 - Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, ACE-Step 1.5, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
-- Earns TAO rewards proportional to quality scores assigned by validators.
+- Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
 
 ---
@@ -41,7 +41,7 @@ A TuneForge miner performs the following:
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only |
 
-These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more TAO.
+These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more α (alpha).
 
 ### Disk Space Breakdown
 

@@ -97,7 +97,7 @@ If running the organic API behind a reverse proxy (e.g., Caddy on Vast.ai), set 
 ## Prerequisites
 
 - Python 3.10, 3.11, or 3.12
-- A Bittensor wallet with sufficient TAO stake for a validator permit
+- A Bittensor wallet with sufficient α (alpha) stake for a validator permit
 - Registration on the subnet (`btcli subnet register`)
 - System packages: `git`, `ffmpeg`, `libsndfile`
 
