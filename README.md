@@ -231,8 +231,6 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | 240 | Seconds between validation rounds |
-| `TF_CHALLENGE_BATCH_SIZE` | int | 8 | Miners per round |
-| `TF_MAX_CONCURRENT_VALIDATIONS` | int | 4 | Max concurrent scoring tasks |
 
 ### Operational
 

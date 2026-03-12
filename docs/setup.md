@@ -109,7 +109,7 @@ sequenceDiagram
 
     PG->>V: Create challenge (genre, mood, tempo, instruments, key, time sig, lyrics, vocals_requested, duration 1-180s)
     V->>V: Build MusicGenerationSynapse with challenge params
-    V->>V: Select batch of miner UIDs (TF_CHALLENGE_BATCH_SIZE=8)
+    V->>V: Select miner subset (deterministic partition across active validators)
     V->>D: Send synapse to miner axons (timeout 120s)
     D->>M: Deliver synapse
     M->>D: Return base64 WAV in synapse
@@ -127,7 +127,7 @@ Step-by-step:
 
 1. **PromptGenerator** creates a challenge with genre, mood, tempo, instruments, key signature, time signature, lyrics, vocals_requested, creative constraint, and duration (1--180 seconds).
 2. Validator constructs a `MusicGenerationSynapse` populated with the challenge parameters.
-3. Validator selects a batch of miner UIDs (`TF_CHALLENGE_BATCH_SIZE`, default 8).
+3. Validator receives its miner subset (deterministically partitioned across active validators via commit-sync).
 4. Dendrite sends the synapse to miner axons with a timeout of 120 seconds.
 5. Miners generate audio and return base64-encoded WAV data in the synapse response.
 6. `ProductionRewardModel.score_batch()` scores all responses (see [Scoring Pipeline](#scoring-pipeline)).
@@ -612,8 +612,6 @@ The environment variables below control only **operational** parameters.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds |
-| `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Miners challenged per round |
-| `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
 
 ### Operational (Validator)
 

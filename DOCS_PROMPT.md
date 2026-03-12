@@ -142,7 +142,6 @@ Everything a validator operator needs. Structure:
 4. **Step-by-step Installation** — Full commands.
 5. **Configuration** — Full `.env.validator` reference. Highlight key tuning parameters:
    - `TF_VALIDATION_INTERVAL` (300s default — how often to run rounds)
-   - `TF_CHALLENGE_BATCH_SIZE` (8 — miners per round)
    - `TF_EMA_ALPHA` (0.2 — EMA smoothing)
    - `TF_STEEPEN_BASELINE` (0.35 — minimum EMA to receive weight)
    - `TF_STEEPEN_POWER` (2.0 — reward curve steepness)

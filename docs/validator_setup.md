@@ -89,8 +89,6 @@ Create a file named `.env.validator` in the project root. All variables use the 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between rounds within an epoch |
-| `TF_CHALLENGE_BATCH_SIZE` | int | `8` | Number of miners to challenge per round |
-| `TF_MAX_CONCURRENT_VALIDATIONS` | int | `4` | Maximum concurrent validation tasks |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 

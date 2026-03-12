@@ -115,15 +115,6 @@ class Settings(BaseSettings):
         default=DEFAULT_EPOCH_INTERVAL,
         description="Seconds between epochs (must be a multiple of round_interval)"
     )
-    challenge_batch_size: int = Field(
-        default=8,
-        description="Number of miners to challenge per round"
-    )
-    max_concurrent_validations: int = Field(
-        default=4,
-        description="Maximum concurrent validation tasks"
-    )
-
     # Preference model
     preference_model_path: Optional[str] = Field(
         default=None,
