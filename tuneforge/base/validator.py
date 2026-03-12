@@ -104,6 +104,19 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
             metagraph=self.metagraph,
         )
 
+        # Register axon on-chain so the platform LB can discover this
+        # validator's IP via the metagraph (even though we don't serve synapses).
+        if not self.settings.neuron_axon_off:
+            self._axon = self.settings.axon
+            try:
+                self.subtensor.serve_axon(
+                    netuid=self.settings.netuid,
+                    axon=self._axon,
+                )
+                logger.info(f"Validator axon registered on port {self._axon.port}")
+            except Exception as exc:
+                logger.warning(f"Validator axon registration failed (non-fatal): {exc}")
+
         logger.info(f"Validator setup complete. UID: {self.uid}")
 
     # ------------------------------------------------------------------
