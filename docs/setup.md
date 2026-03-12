@@ -612,7 +612,7 @@ The environment variables below control only **operational** parameters.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `TF_ROUND_INTERVAL` | int | `240` | Seconds between validation rounds |
-| `TF_EPOCH_INTERVAL` | int | `1140` | Seconds per epoch (sync + 4 rounds + cooldown) |
+| `TF_EPOCH_INTERVAL` | int | `1140` | Seconds per epoch (sync + rounds + cooldown) |
 | `TF_WEIGHT_UPDATE_INTERVAL` | int | `115` | Blocks between on-chain weight submissions |
 | `TF_METAGRAPH_SYNC_INTERVAL` | int | `1200` | Seconds between metagraph syncs |
 | `TF_EMA_STATE_PATH` | str | `./ema_state.json` | Path to persist EMA state across restarts |
