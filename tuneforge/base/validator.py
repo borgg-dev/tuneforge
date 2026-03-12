@@ -484,6 +484,12 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                         if self._commit_sync is not None:
                             active = self._commit_sync.active_count
                             if active == 0:
+                                logger.warning(
+                                    "No active validators — skipping round %d",
+                                    round_index + 1,
+                                )
+                                self._last_completed_round = round_index
+                                self._last_completed_epoch = epoch_start
                                 await asyncio.sleep(2)
                                 continue
 
@@ -503,12 +509,17 @@ class BaseValidatorNeuron(BaseModel, BaseNeuron):
                                     self._current_round_subset = subset
                                 else:
                                     logger.warning(
-                                        "get_miner_subset returned None — skipping round"
+                                        "get_miner_subset returned None — skipping round %d",
+                                        round_index + 1,
                                     )
+                                    self._last_completed_round = round_index
+                                    self._last_completed_epoch = epoch_start
                                     await asyncio.sleep(2)
                                     continue
                             except Exception as exc:
                                 logger.error("Subset selection failed: {}", exc)
+                                self._last_completed_round = round_index
+                                self._last_completed_epoch = epoch_start
                                 await asyncio.sleep(2)
                                 continue
 
