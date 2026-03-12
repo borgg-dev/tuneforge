@@ -14,9 +14,9 @@
 
   <p>TuneForge is a Bittensor subnet where miners compete to generate music from text prompts.<br/>
   Validators issue challenges, score the returned audio across 16 quality signals with penalty<br/>
-  multipliers, and set on-chain weights that determine TAO emissions. The scoring pipeline is<br/>
-  model-agnostic — it evaluates the audio, not the architecture. Miners ship with MusicGen Large<br/>
-  and Stable Audio Open as baselines, but the ones earning real weight will be the ones who bring<br/>
+  multipliers, and set on-chain weights that determine α emissions. The scoring pipeline is<br/>
+  model-agnostic — it evaluates the audio, not the architecture. Miners ship with MusicGen Large,<br/>
+  Stable Audio Open, and ACE-Step 1.5 as baselines, but the ones earning real weight will be the ones who bring<br/>
   better models, fine-tune aggressively, or build something entirely new.</p>
 
   <p><strong>Testnet netuid: 234</strong> · <strong>Mainnet: TBD</strong></p>
