@@ -69,10 +69,7 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
         parameter (not bound methods with `self`). We wrap our methods
         to satisfy this requirement.
         """
-        if self.settings.axon_port:
-            self.axon = bt.Axon(wallet=self.wallet, port=self.settings.axon_port)
-        else:
-            self.axon = bt.Axon(wallet=self.wallet)
+        self.axon = self.settings.axon
 
         # --- Build plain-function wrappers that match bittensor's expected signatures ---
 
