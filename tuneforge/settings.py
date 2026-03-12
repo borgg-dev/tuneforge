@@ -6,7 +6,7 @@ Loads from environment variables and manages wallet/subtensor connections.
 """
 
 from functools import cached_property
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 import os
 import time
 
@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     axon_port: Optional[int] = Field(
         default=None,
         description="Axon port for serving requests"
+    )
+    axon_external_port: Optional[int] = Field(
+        default=None,
+        description="External port advertised on-chain (for Docker/NAT port mapping)"
+    )
+    axon_external_ip: Optional[str] = Field(
+        default=None,
+        description="External IP advertised on-chain (for Docker/NAT setups)"
     )
 
     # Music generation configuration
@@ -234,10 +242,20 @@ class Settings(BaseSettings):
 
     @property
     def axon(self) -> "bt.Axon":
-        """Create axon for serving requests."""
+        """Create axon for serving requests.
+
+        Supports Docker/NAT port mapping via axon_external_port and
+        axon_external_ip — the axon listens on axon_port but registers
+        the external address on-chain so other nodes can reach it.
+        """
+        kwargs: dict[str, Any] = {"wallet": self.wallet}
         if self.axon_port:
-            return bt.Axon(wallet=self.wallet, port=self.axon_port)
-        return bt.Axon(wallet=self.wallet)
+            kwargs["port"] = self.axon_port
+        if self.axon_external_port:
+            kwargs["external_port"] = self.axon_external_port
+        if self.axon_external_ip:
+            kwargs["external_ip"] = self.axon_external_ip
+        return bt.Axon(**kwargs)
 
     def get_uid(self) -> Optional[int]:
         """Get this neuron's UID from metagraph."""
