@@ -11,7 +11,6 @@ Miners can view their scores at the project dashboard.
 import os
 import threading
 import time
-from datetime import datetime
 from typing import Any, Optional, TYPE_CHECKING
 
 from loguru import logger
@@ -193,7 +192,6 @@ class WandbReporter:
             # 1. Round identity and timing
             challenge_id = challenge.get("challenge_id", "")
             data["round/challenge_id"] = challenge_id
-            data["round/timestamp"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             data["round/block"] = block
 
             # 2. Round scores table
