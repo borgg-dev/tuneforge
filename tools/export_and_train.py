@@ -64,7 +64,13 @@ def build_embeddings(
     audio_paths: dict[str, Path],
     cache_path: Path,
 ) -> dict[str, np.ndarray]:
-    """Extract CLAP embeddings for all audio files."""
+    """Extract CLAP embeddings for all audio files.
+
+    Blocks outbound network connections during inference to prevent
+    HuggingFace libraries from hanging on telemetry/xet calls.
+    """
+    import socket
+
     from tuneforge.scoring.clap_scorer import CLAPScorer
 
     scorer = CLAPScorer()
@@ -79,20 +85,40 @@ def build_embeddings(
     embeddings = dict(existing)
     new_count = 0
 
-    for blob_id, path in sorted(audio_paths.items()):
-        if blob_id in embeddings:
-            continue
-        try:
-            import soundfile as sf
+    # Count how many need extracting
+    to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
+    if not to_extract:
+        return embeddings
 
-            audio, sr = sf.read(str(path))
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            emb = scorer.get_audio_embedding(audio, sr)
-            embeddings[blob_id] = emb
-            new_count += 1
-        except Exception as exc:
-            print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
+    # Block outbound network during CLAP inference to prevent HF hangs
+    _original_connect = socket.socket.connect
+
+    def _blocked_connect(self, address):
+        # Allow localhost connections only (for PM2 IPC etc.)
+        host = address[0] if isinstance(address, tuple) else ""
+        if host in ("127.0.0.1", "localhost", "::1", ""):
+            return _original_connect(self, address)
+        raise OSError(f"Outbound network blocked during embedding extraction: {address}")
+
+    socket.socket.connect = _blocked_connect
+    try:
+        for i, blob_id in enumerate(to_extract, 1):
+            path = audio_paths[blob_id]
+            try:
+                import soundfile as sf
+
+                audio, sr = sf.read(str(path))
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                emb = scorer.get_audio_embedding(audio, sr)
+                embeddings[blob_id] = emb
+                new_count += 1
+                if new_count % 5 == 0 or new_count == len(to_extract):
+                    print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
+            except Exception as exc:
+                print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
+    finally:
+        socket.socket.connect = _original_connect
 
     if new_count > 0:
         np.savez_compressed(str(cache_path), **embeddings)
