@@ -66,59 +66,41 @@ def build_embeddings(
 ) -> dict[str, np.ndarray]:
     """Extract CLAP embeddings for all audio files.
 
-    Blocks outbound network connections during inference to prevent
-    HuggingFace libraries from hanging on telemetry/xet calls.
     """
-    import socket
-
     from tuneforge.scoring.clap_scorer import CLAPScorer
 
-    # Block outbound network to prevent HuggingFace library hangs
-    _original_connect = socket.socket.connect
+    scorer = CLAPScorer()
 
-    def _blocked_connect(self, address):
-        host = address[0] if isinstance(address, tuple) else ""
-        if host in ("127.0.0.1", "localhost", "::1", ""):
-            return _original_connect(self, address)
-        raise OSError(f"Outbound network blocked during embedding extraction: {address}")
+    # Load existing cache if present
+    existing: dict[str, np.ndarray] = {}
+    if cache_path.exists():
+        data = np.load(str(cache_path))
+        existing = {k: data[k] for k in data.files}
+        print(f"  Loaded {len(existing)} cached embeddings")
 
-    socket.socket.connect = _blocked_connect
+    embeddings = dict(existing)
+    new_count = 0
 
-    try:
-        scorer = CLAPScorer()
+    # Count how many need extracting
+    to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
+    if not to_extract:
+        return embeddings
 
-        # Load existing cache if present
-        existing: dict[str, np.ndarray] = {}
-        if cache_path.exists():
-            data = np.load(str(cache_path))
-            existing = {k: data[k] for k in data.files}
-            print(f"  Loaded {len(existing)} cached embeddings")
+    for i, blob_id in enumerate(to_extract, 1):
+        path = audio_paths[blob_id]
+        try:
+            import soundfile as sf
 
-        embeddings = dict(existing)
-        new_count = 0
-
-        # Count how many need extracting
-        to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
-        if not to_extract:
-            return embeddings
-
-        for i, blob_id in enumerate(to_extract, 1):
-            path = audio_paths[blob_id]
-            try:
-                import soundfile as sf
-
-                audio, sr = sf.read(str(path))
-                if audio.ndim > 1:
-                    audio = audio.mean(axis=1)
-                emb = scorer.get_audio_embedding(audio, sr)
-                embeddings[blob_id] = emb
-                new_count += 1
-                if new_count % 5 == 0 or new_count == len(to_extract):
-                    print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
-            except Exception as exc:
-                print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
-    finally:
-        socket.socket.connect = _original_connect
+            audio, sr = sf.read(str(path))
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            emb = scorer.get_audio_embedding(audio, sr)
+            embeddings[blob_id] = emb
+            new_count += 1
+            if new_count % 5 == 0 or new_count == len(to_extract):
+                print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
+        except Exception as exc:
+            print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
 
     if new_count > 0:
         np.savez_compressed(str(cache_path), **embeddings)
