@@ -494,7 +494,11 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 try:
                     score_payload = {
                         "scores": [
-                            {"miner_uid": uid, "score": float(reward)}
+                            {
+                                "miner_uid": uid,
+                                "score": float(reward),
+                                "ema": round(self._leaderboard.get_ema(uid), 6),
+                            }
                             for uid, reward in zip(valid_uids, rewards)
                         ]
                     }
