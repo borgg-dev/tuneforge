@@ -147,12 +147,12 @@ def check_and_train(state: dict) -> dict:
         print(f"[daemon] Audio download failed: {exc}")
         return state
 
-    # 3. Build CLAP embeddings
-    print("[daemon] Building CLAP embeddings...")
+    # 3. Build CLAP + MERT embeddings (dual mode)
+    print("[daemon] Building dual CLAP+MERT embeddings...")
     from tools.export_and_train import build_embeddings
-    emb_cache = cache_dir / "embeddings.npz"
+    emb_cache = cache_dir / "embeddings_dual.npz"
     try:
-        embeddings = build_embeddings(audio_paths, emb_cache)
+        embeddings = build_embeddings(audio_paths, emb_cache, dual=True)
     except Exception as exc:
         print(f"[daemon] Embedding extraction failed: {exc}")
         return state
@@ -166,8 +166,8 @@ def check_and_train(state: dict) -> dict:
         print(f"[daemon] Not enough valid pairs ({len(pairs)} < {MIN_TOTAL_PAIRS}). Skipping.")
         return state
 
-    # 5. Train
-    print("[daemon] Training preference model...")
+    # 5. Train (dual mode: 1280-dim input)
+    print("[daemon] Training preference model (dual CLAP+MERT)...")
     from tools.train_preference import train
 
     try:
@@ -176,6 +176,7 @@ def check_and_train(state: dict) -> dict:
             lr=LR,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
+            dual=True,
             patience=PATIENCE,
             val_split=VAL_SPLIT,
             seed=SEED,

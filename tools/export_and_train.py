@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -64,12 +65,51 @@ class _EmbeddingTimeout(Exception):
     pass
 
 
+def _load_mert_model():
+    """Load MERT model for embedding extraction (CPU-friendly, 95M params)."""
+    from transformers import AutoModel, AutoProcessor
+    import torch
+
+    model_name = "m-a-p/MERT-v1-95M"
+    local_only = os.environ.get("HF_HUB_OFFLINE", "") == "1"
+    processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True, local_files_only=local_only)
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True, local_files_only=local_only)
+    model.eval()
+    return processor, model
+
+
+def _extract_mert_embedding(audio: np.ndarray, sr: int, processor, model) -> np.ndarray | None:
+    """Extract pooled MERT embedding (768-dim) from audio."""
+    import torch
+    import librosa
+
+    try:
+        # MERT expects 24kHz
+        if sr != 24000:
+            audio = librosa.resample(audio.astype(np.float32), orig_sr=sr, target_sr=24000)
+
+        inputs = processor(audio, sampling_rate=24000, return_tensors="pt")
+        with torch.no_grad():
+            outputs = model(**inputs, output_hidden_states=True)
+            # Pool last hidden layer: mean over time → 768-dim
+            last_hidden = outputs.hidden_states[-1]  # [1, T, 768]
+            pooled = last_hidden.squeeze(0).mean(dim=0).numpy()  # [768]
+        return pooled
+    except Exception as exc:
+        print(f"  WARNING: MERT extraction failed: {exc}")
+        return None
+
+
 def build_embeddings(
     audio_paths: dict[str, Path],
     cache_path: Path,
-    per_file_timeout: int = 60,
+    dual: bool = False,
+    per_file_timeout: int = 120,
 ) -> dict[str, np.ndarray]:
-    """Extract CLAP embeddings for all audio files.
+    """Extract CLAP (and optionally MERT) embeddings for all audio files.
+
+    When dual=True, stores {blob_id}_clap (512-dim) and {blob_id}_mert (768-dim).
+    When dual=False, stores {blob_id} (512-dim CLAP only) for backwards compatibility.
 
     Uses signal.alarm to timeout individual extractions that hang.
     """
@@ -77,7 +117,12 @@ def build_embeddings(
 
     from tuneforge.scoring.clap_scorer import CLAPScorer
 
-    scorer = CLAPScorer()
+    clap_scorer = CLAPScorer()
+    mert_processor, mert_model = None, None
+    if dual:
+        print("  Loading MERT model for dual-mode embeddings...")
+        mert_processor, mert_model = _load_mert_model()
+        print("  MERT model loaded")
 
     # Load existing cache if present
     existing: dict[str, np.ndarray] = {}
@@ -90,7 +135,12 @@ def build_embeddings(
     new_count = 0
 
     # Count how many need extracting
-    to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
+    if dual:
+        to_extract = [bid for bid in sorted(audio_paths)
+                      if f"{bid}_clap" not in embeddings or f"{bid}_mert" not in embeddings]
+    else:
+        to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
+
     if not to_extract:
         return embeddings
 
@@ -109,12 +159,24 @@ def build_embeddings(
                 audio, sr = sf.read(str(path))
                 if audio.ndim > 1:
                     audio = audio.mean(axis=1)
-                emb = scorer.get_audio_embedding(audio, sr)
-                signal.alarm(0)  # cancel alarm
 
-                if emb is not None:
-                    embeddings[blob_id] = emb
-                    new_count += 1
+                clap_emb = clap_scorer.get_audio_embedding(audio, sr)
+                if clap_emb is None:
+                    signal.alarm(0)
+                    continue
+
+                if dual:
+                    mert_emb = _extract_mert_embedding(audio, sr, mert_processor, mert_model)
+                    signal.alarm(0)
+                    if mert_emb is None:
+                        continue
+                    embeddings[f"{blob_id}_clap"] = clap_emb
+                    embeddings[f"{blob_id}_mert"] = mert_emb
+                else:
+                    signal.alarm(0)
+                    embeddings[blob_id] = clap_emb
+
+                new_count += 1
                 if new_count % 5 == 0 or i == len(to_extract):
                     print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
             except _EmbeddingTimeout:
@@ -137,28 +199,44 @@ def build_pairs(
     annotations: list[dict],
     embeddings: dict[str, np.ndarray],
 ) -> list[tuple[np.ndarray, np.ndarray, float]]:
-    """Convert annotations + embeddings into training pairs."""
+    """Convert annotations + embeddings into training pairs.
+
+    Auto-detects dual mode: if keys contain '_clap'/'_mert' suffixes,
+    concatenates both into 1280-dim vectors. Otherwise uses raw 512-dim.
+    """
+    # Detect dual mode from key format
+    dual = any(k.endswith("_clap") for k in embeddings)
+
     pairs = []
     skipped = 0
 
     for entry in annotations:
-        # Extract blob_id from URL: /api/v1/audio/{blob_id}.wav
         audio_a_url = entry.get("audio_a", "")
         audio_b_url = entry.get("audio_b", "")
         preferred = entry.get("preferred", "")
 
-        # Parse blob_id from URL
         a_id = audio_a_url.split("/")[-1].replace(".wav", "")
         b_id = audio_b_url.split("/")[-1].replace(".wav", "")
 
-        if a_id not in embeddings or b_id not in embeddings:
-            skipped += 1
-            continue
+        if dual:
+            a_clap, a_mert = f"{a_id}_clap", f"{a_id}_mert"
+            b_clap, b_mert = f"{b_id}_clap", f"{b_id}_mert"
+            if not {a_clap, a_mert, b_clap, b_mert} <= set(embeddings):
+                skipped += 1
+                continue
+            emb_a = np.concatenate([embeddings[a_clap], embeddings[a_mert]])
+            emb_b = np.concatenate([embeddings[b_clap], embeddings[b_mert]])
+        else:
+            if a_id not in embeddings or b_id not in embeddings:
+                skipped += 1
+                continue
+            emb_a = embeddings[a_id]
+            emb_b = embeddings[b_id]
 
         if preferred == "a":
-            pairs.append((embeddings[a_id], embeddings[b_id], 1.0))
+            pairs.append((emb_a, emb_b, 1.0))
         elif preferred == "b":
-            pairs.append((embeddings[b_id], embeddings[a_id], 1.0))
+            pairs.append((emb_b, emb_a, 1.0))
         else:
             skipped += 1
 
