@@ -186,7 +186,7 @@ ENCODEC_MODEL: str = "facebook/encodec_24khz"
 PREFERENCE_WEIGHT_MIN: float = 0.02
 PREFERENCE_WEIGHT_MAX: float = 0.20
 PREFERENCE_ACCURACY_MIN: float = 0.55
-PREFERENCE_ACCURACY_MAX: float = 0.80
+PREFERENCE_ACCURACY_MAX: float = 0.75
 
 # ---------------------------------------------------------------------------
 # Annotator reliability

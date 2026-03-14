@@ -100,14 +100,15 @@ class PreferenceWeightScaler:
     def get_scaled_weight(self) -> float:
         """Return preference weight scaled by model quality.
 
-        Linear interpolation: accuracy=min->min_weight, accuracy=max->max_weight.
+        Quadratic interpolation: keeps mediocre models (55-65%) at low weight
+        while rewarding strong models (70%+) with meaningful influence.
         Returns min_weight when no accuracy data available.
         """
         if self._current_accuracy is None:
             return self._min_weight
         clamped = max(self._min_accuracy, min(self._max_accuracy, self._current_accuracy))
         t = (clamped - self._min_accuracy) / (self._max_accuracy - self._min_accuracy + 1e-8)
-        return self._min_weight + t * (self._max_weight - self._min_weight)
+        return self._min_weight + (t ** 2) * (self._max_weight - self._min_weight)
 
 
 class PreferenceModel:
