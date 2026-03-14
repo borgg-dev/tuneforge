@@ -73,35 +73,35 @@ def build_embeddings(
 
     from tuneforge.scoring.clap_scorer import CLAPScorer
 
-    scorer = CLAPScorer()
-
-    # Load existing cache if present
-    existing: dict[str, np.ndarray] = {}
-    if cache_path.exists():
-        data = np.load(str(cache_path))
-        existing = {k: data[k] for k in data.files}
-        print(f"  Loaded {len(existing)} cached embeddings")
-
-    embeddings = dict(existing)
-    new_count = 0
-
-    # Count how many need extracting
-    to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
-    if not to_extract:
-        return embeddings
-
-    # Block outbound network during CLAP inference to prevent HF hangs
+    # Block outbound network to prevent HuggingFace library hangs
     _original_connect = socket.socket.connect
 
     def _blocked_connect(self, address):
-        # Allow localhost connections only (for PM2 IPC etc.)
         host = address[0] if isinstance(address, tuple) else ""
         if host in ("127.0.0.1", "localhost", "::1", ""):
             return _original_connect(self, address)
         raise OSError(f"Outbound network blocked during embedding extraction: {address}")
 
     socket.socket.connect = _blocked_connect
+
     try:
+        scorer = CLAPScorer()
+
+        # Load existing cache if present
+        existing: dict[str, np.ndarray] = {}
+        if cache_path.exists():
+            data = np.load(str(cache_path))
+            existing = {k: data[k] for k in data.files}
+            print(f"  Loaded {len(existing)} cached embeddings")
+
+        embeddings = dict(existing)
+        new_count = 0
+
+        # Count how many need extracting
+        to_extract = [bid for bid in sorted(audio_paths) if bid not in embeddings]
+        if not to_extract:
+            return embeddings
+
         for i, blob_id in enumerate(to_extract, 1):
             path = audio_paths[blob_id]
             try:
