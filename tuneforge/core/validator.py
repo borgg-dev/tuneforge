@@ -631,10 +631,25 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
             model_path.write_bytes(model_data)
             self._current_model_sha = remote_sha
-            logger.info(
-                f"Updated preference model to v{remote_version} "
-                f"(sha256={remote_sha[:12]}..., {len(model_data)} bytes)"
-            )
+
+            # Hot-reload the model into memory
+            try:
+                from tuneforge.scoring.preference_model import PreferenceModel
+                self._reward_model._preference = PreferenceModel(
+                    model_path=str(model_path),
+                    clap_scorer=self._reward_model._clap,
+                    neural_scorer=self._reward_model._neural,
+                )
+                logger.info(
+                    f"Updated preference model to v{remote_version} "
+                    f"(sha256={remote_sha[:12]}..., {len(model_data)} bytes) — reloaded into memory"
+                )
+            except Exception as reload_exc:
+                logger.warning(f"Preference model downloaded but reload failed: {reload_exc}")
+                logger.info(
+                    f"Downloaded preference model v{remote_version} "
+                    f"(sha256={remote_sha[:12]}..., will load on next restart)"
+                )
         except Exception as exc:
             logger.debug(f"Preference model check failed: {exc}")
 
