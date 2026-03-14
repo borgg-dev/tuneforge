@@ -134,7 +134,16 @@ class PreferenceModel:
         self._bootstrap = True
         self._dual_mode = False
         self._model_path = model_path
-        self._scaler = PreferenceWeightScaler()
+        from tuneforge.config.scoring_config import (
+            PREFERENCE_WEIGHT_MIN, PREFERENCE_WEIGHT_MAX,
+            PREFERENCE_ACCURACY_MIN, PREFERENCE_ACCURACY_MAX,
+        )
+        self._scaler = PreferenceWeightScaler(
+            min_weight=PREFERENCE_WEIGHT_MIN,
+            max_weight=PREFERENCE_WEIGHT_MAX,
+            min_accuracy=PREFERENCE_ACCURACY_MIN,
+            max_accuracy=PREFERENCE_ACCURACY_MAX,
+        )
 
         if model_path is not None and Path(model_path).exists():
             try:
