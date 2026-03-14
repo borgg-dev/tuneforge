@@ -60,13 +60,21 @@ def download_audio(
     return paths
 
 
+class _EmbeddingTimeout(Exception):
+    pass
+
+
 def build_embeddings(
     audio_paths: dict[str, Path],
     cache_path: Path,
+    per_file_timeout: int = 60,
 ) -> dict[str, np.ndarray]:
     """Extract CLAP embeddings for all audio files.
 
+    Uses signal.alarm to timeout individual extractions that hang.
     """
+    import signal
+
     from tuneforge.scoring.clap_scorer import CLAPScorer
 
     scorer = CLAPScorer()
@@ -86,21 +94,37 @@ def build_embeddings(
     if not to_extract:
         return embeddings
 
-    for i, blob_id in enumerate(to_extract, 1):
-        path = audio_paths[blob_id]
-        try:
-            import soundfile as sf
+    def _timeout_handler(signum, frame):
+        raise _EmbeddingTimeout()
 
-            audio, sr = sf.read(str(path))
-            if audio.ndim > 1:
-                audio = audio.mean(axis=1)
-            emb = scorer.get_audio_embedding(audio, sr)
-            embeddings[blob_id] = emb
-            new_count += 1
-            if new_count % 5 == 0 or new_count == len(to_extract):
-                print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
-        except Exception as exc:
-            print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+
+    try:
+        for i, blob_id in enumerate(to_extract, 1):
+            path = audio_paths[blob_id]
+            try:
+                import soundfile as sf
+
+                signal.alarm(per_file_timeout)
+                audio, sr = sf.read(str(path))
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                emb = scorer.get_audio_embedding(audio, sr)
+                signal.alarm(0)  # cancel alarm
+
+                if emb is not None:
+                    embeddings[blob_id] = emb
+                    new_count += 1
+                if new_count % 5 == 0 or i == len(to_extract):
+                    print(f"  Extracted {new_count}/{len(to_extract)} embeddings...")
+            except _EmbeddingTimeout:
+                print(f"  WARNING: Timeout extracting {blob_id} after {per_file_timeout}s — skipping")
+            except Exception as exc:
+                signal.alarm(0)
+                print(f"  WARNING: Failed to extract embedding for {blob_id}: {exc}")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
     if new_count > 0:
         np.savez_compressed(str(cache_path), **embeddings)
