@@ -31,11 +31,16 @@ class CLAPScorer:
         if self._model is not None:
             return
         try:
+            import os
             from transformers import ClapModel, ClapProcessor
 
-            logger.info(f"Loading CLAP model: {self._model_name}")
-            self._processor = ClapProcessor.from_pretrained(self._model_name)
-            self._model = ClapModel.from_pretrained(self._model_name)
+            # Use local_files_only when offline env is set or cache exists,
+            # to avoid hanging on HuggingFace network calls
+            local_only = os.environ.get("HF_HUB_OFFLINE", "") == "1" or os.environ.get("TRANSFORMERS_OFFLINE", "") == "1"
+
+            logger.info(f"Loading CLAP model: {self._model_name} (local_only={local_only})")
+            self._processor = ClapProcessor.from_pretrained(self._model_name, local_files_only=local_only)
+            self._model = ClapModel.from_pretrained(self._model_name, local_files_only=local_only)
             self._model.eval()
             if torch.cuda.is_available():
                 self._model = self._model.cuda()
