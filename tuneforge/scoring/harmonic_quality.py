@@ -64,10 +64,6 @@ class HarmonicQualityScorer:
                 audio = audio.mean(axis=0)
             audio = audio.astype(np.float32)
 
-            # --- Prompt gate: only score vocals when explicitly requested ---
-            if not vocals_requested:
-                return {k: 0.5 for k in HARMONIC_WEIGHTS}
-
             # --- Edge-case guards (neutral, not zero) ---
             if np.max(np.abs(audio)) < self._SILENCE_THRESHOLD:
                 return {k: 0.5 for k in HARMONIC_WEIGHTS}
@@ -76,6 +72,15 @@ class HarmonicQualityScorer:
 
             # Pre-compute HPSS harmonic signal (shared across metrics)
             harmonic = librosa.effects.hpss(audio)[0]
+
+            # --- Prompt gate ---
+            if not vocals_requested:
+                # Check if unwanted vocals are present; penalize if so
+                presence = self._detect_vocal_presence(harmonic, sr, librosa)
+                if presence > 0.4:
+                    penalty = max(0.05, 0.5 - presence)
+                    return {k: penalty for k in HARMONIC_WEIGHTS}
+                return {k: 0.5 for k in HARMONIC_WEIGHTS}
 
             return {
                 "vocal_presence": self._score_vocal_presence(harmonic, sr, librosa),
@@ -100,6 +105,26 @@ class HarmonicQualityScorer:
         for metric, weight in HARMONIC_WEIGHTS.items():
             total += scores.get(metric, 0.5) * weight
         return float(np.clip(total, 0.0, 1.0))
+
+    # ------------------------------------------------------------------
+    # Vocal detection (for unwanted-vocal penalty)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_vocal_presence(harmonic: np.ndarray, sr: int, librosa) -> float:
+        """Return raw vocal-band energy ratio (0-1). Higher = more vocal content."""
+        try:
+            n_fft = 2048
+            S = np.abs(librosa.stft(harmonic, n_fft=n_fft))
+            freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+            vocal_mask = (freqs >= 300.0) & (freqs <= 4000.0)
+            total_energy = float(np.sum(S ** 2))
+            if total_energy < 1e-10:
+                return 0.0
+            vocal_energy = float(np.sum(S[vocal_mask, :] ** 2))
+            return vocal_energy / total_energy
+        except Exception:
+            return 0.0
 
     # ------------------------------------------------------------------
     # Individual metrics
