@@ -28,7 +28,6 @@ from tuneforge.rewards.leaderboard import MinerLeaderboard
 from tuneforge.rewards.reward import ProductionRewardModel
 from tuneforge.rewards.weight_setter import WeightSetter
 from tuneforge.settings import Settings, get_settings
-from tuneforge.services.wandb_reporter import WandbReporter
 from tuneforge.validation.challenge_manager import ChallengeManager
 from tuneforge.validation.prompt_generator import PromptGenerator
 
@@ -82,17 +81,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
             validator_hotkey = settings.wallet.hotkey.ss58_address
         except Exception:
             pass
-        self._wandb_reporter = WandbReporter(
-            project=settings.wandb_project,
-            entity=settings.wandb_entity,
-            api_key=settings.wandb_api_key,
-            validator_uid=settings.get_uid(),
-            validator_hotkey=validator_hotkey,
-            enabled=settings.wandb_enabled,
-            wallet=settings.wallet if validator_hotkey else None,
-            netuid=settings.netuid,
-        )
-
         # Multi-validator status tracking
         self._organic_active_count: int = 0
         self._is_challenge_scoring: bool = False
@@ -492,16 +480,21 @@ class TuneForgeValidator(BaseValidatorNeuron):
             # 6b. Push scores to platform API
             if self._api_client is not None and api_round_id is not None:
                 try:
-                    score_payload = {
-                        "scores": [
-                            {
-                                "miner_uid": uid,
-                                "score": float(reward),
-                                "ema": round(self._leaderboard.get_ema(uid), 6),
-                            }
-                            for uid, reward in zip(valid_uids, rewards)
-                        ]
-                    }
+                    breakdowns = self._reward_model._last_breakdowns
+                    score_entries = []
+                    for i, (uid, reward) in enumerate(zip(valid_uids, rewards)):
+                        entry = {
+                            "miner_uid": uid,
+                            "score": float(reward),
+                            "ema": round(self._leaderboard.get_ema(uid), 6),
+                        }
+                        if i < len(breakdowns):
+                            bd = breakdowns[i].to_dict()
+                            bd.pop("uid", None)
+                            bd.pop("hotkey", None)
+                            entry["score_breakdown"] = bd
+                        score_entries.append(entry)
+                    score_payload = {"scores": score_entries}
                     score_resp = await self._api_client.post(
                         f"/api/v1/validator/rounds/{api_round_id}/scores",
                         json=score_payload,
@@ -519,21 +512,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
                     f"  UID {uid}: reward={reward:.4f}, "
                     f"ema={ema:.4f}, weight={weight:.4f}"
                 )
-
-            # 6c. W&B logging (scores only — audio lives in PostgreSQL,
-            # cross-referenced by challenge_id)
-            if self._wandb_reporter.enabled:
-                try:
-                    self._wandb_reporter.log_round(
-                        challenge=challenge,
-                        breakdowns=self._reward_model._last_breakdowns,
-                        uids=valid_uids,
-                        hotkeys=valid_hotkeys,
-                        leaderboard=self._leaderboard,
-                        block=current_block,
-                    )
-                except Exception as exc:
-                    logger.debug(f"W&B round logging failed: {exc}")
 
         # 7. Decay EMA for non-responding miners (score 0.0)
         # IMPORTANT: Only decay miners that were in OUR assigned subset.
@@ -1049,7 +1027,6 @@ class TuneForgeValidator(BaseValidatorNeuron):
             self._leaderboard.save_state(EMA_STATE_PATH)
         except Exception as exc:
             logger.error(f"Failed to save EMA state on shutdown: {exc}")
-        self._wandb_reporter.finish()
         super().shutdown()
 
     def process_round_results(self, response_event: DendriteResponseEvent) -> None:

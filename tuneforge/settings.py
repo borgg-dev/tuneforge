@@ -180,12 +180,6 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="Log level")
     log_dir: str = Field(default="/tmp/tuneforge", description="Log directory")
 
-    # Monitoring
-    wandb_enabled: bool = Field(default=False, description="Enable W&B logging")
-    wandb_entity: str = Field(default="borgglab", description="W&B entity (organization)")
-    wandb_project: str = Field(default="tuneforge", description="W&B project name")
-    wandb_api_key: str = Field(default="", description="W&B API key for non-interactive auth")
-
     # Internal state
     _wallet: Optional["bt.Wallet"] = None
     _subtensor: Optional["bt.Subtensor"] = None
