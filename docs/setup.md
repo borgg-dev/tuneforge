@@ -642,14 +642,6 @@ The environment variables below control only **operational** parameters.
 | `TF_LOG_LEVEL` | str | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `TF_LOG_DIR` | str | `/tmp/tuneforge` | Directory for log files |
 
-### Monitoring
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `TF_WANDB_ENABLED` | bool | `false` | Enable Weights & Biases logging |
-| `TF_WANDB_ENTITY` | str | `None` | W&B entity (team or username) |
-| `TF_WANDB_PROJECT` | str | `tuneforge` | W&B project name |
-
 ---
 
 ## Database and Persistence

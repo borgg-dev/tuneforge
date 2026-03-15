@@ -70,7 +70,7 @@ For GPUs with less VRAM (16 GB), use a lighter miner model (Stable Audio ~6 GB o
 | MERT model | ~0.5 GB | Downloaded on first run |
 | Whisper model | ~1.5 GB | Downloaded on first run |
 | OS + system packages | ~4-5 GB | Depends on base image |
-| EMA state, logs, W&B data | ~1 GB | Grows slowly over time |
+| EMA state, logs | ~1 GB | Grows slowly over time |
 | Audio storage (if no platform API) | ~5 GB/day | Cleaned automatically if using cron; not needed if `TF_VALIDATOR_API_URL` is set |
 | Headroom | ~5 GB | Recommended buffer |
 
@@ -191,10 +191,6 @@ Each epoch runs: 60s commit-reveal sync, then 4 rounds at 240s each, then 60s co
 |----------|------|---------|-------------|
 | `TF_LOG_LEVEL` | str | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `TF_LOG_DIR` | str | `/tmp/tuneforge` | Directory for log files |
-| `TF_WANDB_ENABLED` | bool | `false` | Enable Weights & Biases logging |
-| `TF_WANDB_API_KEY` | str | `""` | W&B API key for non-interactive auth |
-| `TF_WANDB_ENTITY` | str | `borgglab` | W&B entity (team or username) |
-| `TF_WANDB_PROJECT` | str | `tuneforge` | W&B project name |
 
 ### Minimal Example
 
@@ -468,7 +464,7 @@ The preference model adds a human-aligned quality signal to the scoring pipeline
 - **Leaderboard summary** is logged each round: total miners scored, number with weight, elite count, EMA mean and max.
 - **Per-miner detail** is logged each round: raw reward, current EMA, and computed weight.
 - **Leaderboard snapshot** is saved to `storage/leaderboard.json` after each round.
-- **Weights & Biases**: enable with `TF_WANDB_ENABLED=true` for real-time dashboards of scoring metrics, EMA progression, and weight distributions.
+- **Score breakdowns** are stored in PostgreSQL and viewable in the mining dashboard.
 
 ---
 

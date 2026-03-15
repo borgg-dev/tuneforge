@@ -454,14 +454,6 @@ docker logs tuneforge-miner -f
 
 The miner exposes health information via `HealthReportSynapse`, which includes GPU utilization, memory usage, generation count, and error count.
 
-### Weights and Biases (Optional)
-
-Enable W&B logging for detailed tracking:
-
-```bash
-TF_WANDB_ENABLED=true
-```
-
 ---
 
 ## Troubleshooting

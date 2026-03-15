@@ -261,9 +261,6 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 |----------|------|---------|-------------|
 | `TF_LOG_LEVEL` | str | INFO | Log level |
 | `TF_LOG_DIR` | str | /tmp/tuneforge | Log directory |
-| `TF_WANDB_ENABLED` | bool | false | Enable W&B logging |
-| `TF_WANDB_ENTITY` | str | None | W&B entity |
-| `TF_WANDB_PROJECT` | str | tuneforge | W&B project |
 
 ### Consensus-Critical Constants
 
