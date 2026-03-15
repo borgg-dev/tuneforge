@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 from loguru import logger
 
-from tuneforge.scoring.genre_profiles import GenreProfile, get_genre_profile
+
 
 # ---------------------------------------------------------------------------
 # Sub-metric weights (must sum to 1.0)
@@ -84,11 +84,8 @@ class VocalLyricsScorer:
                 audio = audio.mean(axis=0)
             audio = audio.astype(np.float32)
 
-            profile = get_genre_profile(genre) if genre else GenreProfile(family="default")
-
-            # --- Genre gate: instrumental genres get neutral scores ---
-            # Overridden when the prompt explicitly requests vocals.
-            if not profile.vocal_expected and not vocals_requested:
+            # --- Prompt gate: only score vocals when explicitly requested ---
+            if not vocals_requested:
                 return dict(_NEUTRAL)
 
             # --- Edge-case guards ---
