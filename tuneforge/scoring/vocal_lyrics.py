@@ -99,11 +99,10 @@ class VocalLyricsScorer:
 
             # --- Prompt gate ---
             if not vocals_requested:
-                # Check if unwanted vocals are present; penalize if so
+                # Check if unwanted vocals are present; score 0 if so
                 presence = self._detect_vocal_presence(harmonic, sr, librosa)
                 if presence > 0.4:
-                    penalty = max(0.05, 0.5 - presence)
-                    return {k: penalty for k in VOCAL_LYRICS_WEIGHTS}
+                    return {k: 0.0 for k in VOCAL_LYRICS_WEIGHTS}
                 return dict(_NEUTRAL)
 
             return {
