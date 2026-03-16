@@ -120,7 +120,7 @@ class CLAPScorer:
             else:
                 score = float(np.clip((cosine_sim - CLAP_SIM_FLOOR) / denom, 0.0, 1.0))
 
-            logger.info(f"CLAP score: {score:.4f} (cosine={cosine_sim:.4f}, floor={CLAP_SIM_FLOOR}, ceil={CLAP_SIM_CEILING})")
+            logger.debug(f"CLAP score: {score:.4f} (cosine={cosine_sim:.4f})")
             return score
 
         except Exception as exc:
