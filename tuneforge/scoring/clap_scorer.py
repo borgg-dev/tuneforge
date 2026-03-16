@@ -1,7 +1,7 @@
 """
 CLAP-based text-audio similarity scorer for TuneForge.
 
-Uses laion/larger_clap_music to compute cosine similarity between
+Uses CLAP (laion/clap-htsat-fused) to compute cosine similarity between
 a text prompt and generated audio, measuring prompt adherence.
 """
 

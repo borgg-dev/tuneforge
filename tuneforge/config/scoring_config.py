@@ -134,12 +134,14 @@ MIN_DURATION: float = 1.0
 # ---------------------------------------------------------------------------
 # CLAP scoring parameters
 # ---------------------------------------------------------------------------
-CLAP_MODEL: str = "laion/larger_clap_music"
+CLAP_MODEL: str = "laion/clap-htsat-fused"
 CLAP_SAMPLE_RATE: int = 48000
 # Empirical cosine similarity bounds for CLAP music-text pairs.
 # Raw cosine similarities are remapped from [floor, ceiling] → [0, 1].
-CLAP_SIM_FLOOR: float = 0.15
-CLAP_SIM_CEILING: float = 0.75
+# Calibrated for laion/clap-htsat-fused (larger_clap_music is broken
+# with transformers >= 4.50, returning near-zero cosine for all inputs).
+CLAP_SIM_FLOOR: float = 0.05
+CLAP_SIM_CEILING: float = 0.45
 
 # ---------------------------------------------------------------------------
 # MERT model (neural audio quality)
