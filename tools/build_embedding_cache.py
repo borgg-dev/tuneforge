@@ -92,7 +92,7 @@ def collect_wav_paths(annotations_path: str) -> list[str]:
 
 def build_cache(
     wav_paths: list[str],
-    model_name: str = "laion/larger_clap_music",
+    model_name: str = "laion/clap-htsat-fused",
     existing: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
     """Extract CLAP embeddings for all WAV files.
@@ -196,8 +196,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="laion/larger_clap_music",
-        help="CLAP model name (default: laion/larger_clap_music).",
+        default="laion/clap-htsat-fused",
+        help="CLAP model name (default: laion/clap-htsat-fused).",
     )
     parser.add_argument(
         "--skip-existing",

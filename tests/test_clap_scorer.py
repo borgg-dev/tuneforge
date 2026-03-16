@@ -13,7 +13,7 @@ class TestCLAPScorerMocked:
         """Create a fully mocked CLAPScorer."""
         from tuneforge.scoring.clap_scorer import CLAPScorer
         scorer = CLAPScorer.__new__(CLAPScorer)
-        scorer._model_name = "laion/larger_clap_music"
+        scorer._model_name = "laion/clap-htsat-fused"
 
         # Mock model
         mock_model = MagicMock()

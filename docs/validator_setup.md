@@ -248,7 +248,7 @@ All scoring weights and thresholds described below are **hardcoded for consensus
 
 | # | Scorer | Weight | Description |
 |---|--------|--------|-------------|
-| 1 | **CLAP Adherence** | 0.19 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity between text prompt embedding and audio embedding is remapped from [0.15, 0.75] to [0, 1]. The primary signal: does the audio match the prompt? |
+| 1 | **CLAP Adherence** | 0.19 | Text-audio similarity using `laion/clap-htsat-fused`. Raw cosine similarity between text prompt embedding and audio embedding is remapped from [0.05, 0.45] to [0, 1]. The primary signal: does the audio match the prompt? |
 | 2 | **Attribute Verification** | 0.11 | Verifies specific musical attributes (tempo, key, instruments) via librosa analysis and CLAP zero-shot classification. |
 | 3 | **Musicality** | 0.09 | Pitch stability, harmonic progression, chord coherence, rhythmic groove, and arrangement quality. Genre-aware targets. One-sided minimum floor (not bell curve). |
 | 4 | **Vocal Lyrics** | 0.08 | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, and sibilance control. Returns neutral 0.5 for instrumental genres unless `vocals_requested=True`. |

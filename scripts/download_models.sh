@@ -20,8 +20,8 @@ echo "Downloading CLAP model..."
 python3 -c "
 from transformers import ClapModel, ClapProcessor
 print('Downloading CLAP model...')
-ClapModel.from_pretrained('laion/larger_clap_music')
-ClapProcessor.from_pretrained('laion/larger_clap_music')
+ClapModel.from_pretrained('laion/clap-htsat-fused')
+ClapProcessor.from_pretrained('laion/clap-htsat-fused')
 print('CLAP model downloaded.')
 "
 

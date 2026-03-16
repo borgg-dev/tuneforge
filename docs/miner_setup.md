@@ -344,7 +344,7 @@ Understanding the scoring system helps you maximize rewards. The validator evalu
 
 | Scorer | Weight | What It Measures |
 |--------|--------|-----------------|
-| CLAP Adherence | 0.19 | Text-audio similarity using `laion/larger_clap_music`. Raw cosine similarity mapped from [0.15, 0.75] to [0, 1]. |
+| CLAP Adherence | 0.19 | Text-audio similarity using `laion/clap-htsat-fused`. Raw cosine similarity mapped from [0.05, 0.45] to [0, 1]. |
 | Attribute Verification | 0.11 | Attribute-level verification (genre, mood, tempo, key, instruments) |
 | Musicality | 0.09 | Pitch, harmony, rhythm, arrangement quality |
 | Vocal Lyrics | 0.08 | Whisper-based lyrics intelligibility, vocal clarity, pitch accuracy, expressiveness, sibilance |

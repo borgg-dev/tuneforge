@@ -131,7 +131,7 @@ Every round, miners are scored across 16 weighted signals grouped into five cate
 | Diversity | 6% | Other |
 | Speed | 2% | Other |
 
-**CLAP Adherence** (19%) is the biggest single signal. It measures text-audio cosine similarity using `laion/larger_clap_music`, mapped from a floor of 0.15 to a ceiling of 0.75. If your audio doesn't match the prompt, nothing else saves you.
+**CLAP Adherence** (19%) is the biggest single signal. It measures text-audio cosine similarity using `laion/clap-htsat-fused`, mapped from a floor of 0.05 to a ceiling of 0.45. If your audio doesn't match the prompt, nothing else saves you.
 
 **Attribute Verification** (11%) checks concrete prompt compliance -- tempo, key, instruments -- using librosa analysis and CLAP zero-shot classification.
 

@@ -189,7 +189,7 @@ All weights are **hardcoded** in `scoring_config.py` for validator consensus. Th
 
 | Component | Weight | Model / Method | Description |
 |-----------|--------|----------------|-------------|
-| `clap` | 0.19 | `laion/larger_clap_music` | CLAP text-audio cosine similarity (prompt adherence). Raw similarity in [0.15, 0.75] mapped to [0, 1]. |
+| `clap` | 0.19 | `laion/clap-htsat-fused` | CLAP text-audio cosine similarity (prompt adherence). Raw similarity in [0.05, 0.45] mapped to [0, 1]. |
 | `attribute` | 0.11 | Rule-based | Attribute verification (genre, mood, tempo, key, instruments) |
 | `musicality` | 0.09 | Librosa analysis | Rhythmic and harmonic analysis with one-sided minimum floor |
 | `vocal_lyrics` | 0.08 | Whisper | Lyrics intelligibility, vocal clarity, pitch accuracy |
@@ -512,7 +512,7 @@ docker compose down
 
 Environment files are loaded via `env_file` directives: `.env.miner` for the miner and api services, `.env.validator` for the validator service.
 
-The miner Dockerfile pre-downloads the MusicGen Large model at build time. The validator Dockerfile pre-downloads the `laion/larger_clap_music` CLAP model. This avoids download delays at first startup.
+The miner Dockerfile pre-downloads the MusicGen Large model at build time. The validator Dockerfile pre-downloads the `laion/clap-htsat-fused` CLAP model. This avoids download delays at first startup.
 
 ---
 
