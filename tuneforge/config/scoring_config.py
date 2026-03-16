@@ -141,7 +141,7 @@ CLAP_SAMPLE_RATE: int = 48000
 # Calibrated for laion/clap-htsat-fused (larger_clap_music is broken
 # with transformers >= 4.50, returning near-zero cosine for all inputs).
 CLAP_SIM_FLOOR: float = 0.05
-CLAP_SIM_CEILING: float = 0.45
+CLAP_SIM_CEILING: float = 0.55
 
 # ---------------------------------------------------------------------------
 # MERT model (neural audio quality)
