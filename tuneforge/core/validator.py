@@ -387,8 +387,10 @@ class TuneForgeValidator(BaseValidatorNeuron):
         )
 
         # 4b. Push validation round to platform API (or filesystem fallback)
+        # Always create a round when API is available, even with 0 responses,
+        # so we can push decayed EMA scores for non-responding miners.
         api_round_id: str | None = None
-        if self._api_client is not None and valid_responses:
+        if self._api_client is not None:
             try:
                 validator_hotkey = ""
                 try:
@@ -523,6 +525,27 @@ class TuneForgeValidator(BaseValidatorNeuron):
             self._leaderboard.update(uid, 0.0)
         if non_responding:
             logger.debug(f"Applied score=0.0 to {len(non_responding)} non-responding miners (of {len(miner_uids)} assigned)")
+
+        # 7b. Push decayed EMA for non-responding miners to platform API
+        if self._api_client is not None and api_round_id is not None and non_responding:
+            try:
+                decay_entries = []
+                for uid in non_responding:
+                    hotkey = self.metagraph.hotkeys[uid] if uid < len(self.metagraph.hotkeys) else None
+                    decay_entries.append({
+                        "miner_uid": uid,
+                        "miner_hotkey": hotkey,
+                        "score": 0.0,
+                        "ema": round(self._leaderboard.get_ema(uid), 6),
+                    })
+                decay_resp = await self._api_client.post(
+                    f"/api/v1/validator/rounds/{api_round_id}/scores",
+                    json={"scores": decay_entries},
+                )
+                decay_resp.raise_for_status()
+                logger.info(f"Pushed decayed EMA for {len(non_responding)} non-responding miners")
+            except Exception as exc:
+                logger.error(f"Failed to push decayed EMA scores: {exc}")
 
         # 8. Save leaderboard snapshot for the organic query router
         try:
