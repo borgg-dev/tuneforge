@@ -22,10 +22,10 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 
 MELODY_WEIGHTS: dict[str, float] = {
-    "interval_quality": 0.30,
-    "contour_quality": 0.25,
-    "repetition_structure": 0.25,
-    "melodic_memorability": 0.20,
+    "interval_quality": 0.20,
+    "contour_quality": 0.35,
+    "repetition_structure": 0.20,
+    "melodic_memorability": 0.25,
 }
 
 
@@ -128,9 +128,38 @@ class MelodyCoherenceScorer:
             if len(intervals) == 0:
                 return 0.0
 
-            # Fraction within musical range (0-7 semitones)
-            musical_fraction = float(np.mean(intervals <= 7.0))
-            return float(np.clip(musical_fraction, 0.0, 1.0))
+            # Deduplicate within-note frames: collapse runs of similar pitches
+            # to get note-level intervals instead of frame-level.
+            # Group consecutive frames within 0.5 semitones as the same note.
+            note_pitches = [semitones[0]]
+            for s in semitones[1:]:
+                if abs(s - note_pitches[-1]) >= 0.5:
+                    note_pitches.append(s)
+            note_pitches = np.array(note_pitches)
+            note_intervals = np.abs(np.diff(note_pitches)) if len(note_pitches) > 1 else np.array([])
+
+            if len(note_intervals) == 0:
+                # Single sustained pitch
+                return 0.15
+
+            # Penalize true monotone (only 1-2 distinct pitches)
+            unique_pitches = len(np.unique(np.round(note_pitches)))
+            if unique_pitches <= 2:
+                return 0.15
+
+            # Musical step range (0.5-5 semitones), leaps (5-12), errors (>12)
+            step_fraction = float(np.mean((note_intervals >= 0.5) & (note_intervals <= 5.0)))
+            leap_fraction = float(np.mean((note_intervals > 5.0) & (note_intervals <= 12.0)))
+            error_fraction = float(np.mean(note_intervals > 12.0))
+
+            base_score = step_fraction + 0.5 * leap_fraction - 0.5 * error_fraction
+
+            # Variety bonus: reward diverse interval usage
+            unique_intervals = len(np.unique(np.round(note_intervals)))
+            variety_bonus = min(0.15, 0.015 * unique_intervals)
+
+            score = base_score + variety_bonus
+            return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
 
@@ -257,13 +286,13 @@ class MelodyCoherenceScorer:
             # Cosine similarity matrix
             sim_matrix = window_chromas @ window_chromas.T
 
-            # Count off-diagonal pairs with similarity > 0.8
+            # Count off-diagonal pairs with similarity > 0.85
             n_pairs = 0
             n_similar = 0
             for i in range(n_windows):
                 for j in range(i + 1, n_windows):
                     n_pairs += 1
-                    if sim_matrix[i, j] > 0.8:
+                    if sim_matrix[i, j] > 0.85:
                         n_similar += 1
 
             if n_pairs == 0:
@@ -271,12 +300,16 @@ class MelodyCoherenceScorer:
 
             ratio = n_similar / n_pairs
 
-            # Continuous: ramp from 0 to 0.6 at 10%, then 0.6 to 1.0 above
-            # At threshold=0.10: 0.5 + 0.10 = 0.60, ramp gives 0.10/0.10*0.60 = 0.60
-            if ratio >= 0.10:
-                score = min(1.0, 0.5 + ratio)
+            # Bell-curve style: sweet spot at 0.20-0.70, penalize extremes
+            if ratio > 0.90:
+                # Extreme uniformity — likely looped or trivial content
+                score = 0.3
+            elif ratio < 0.05:
+                # Almost no repetition — unstructured
+                score = ratio / 0.05 * 0.4
             else:
-                score = max(0.0, ratio / 0.10 * 0.6)
+                # Gaussian bell curve centred at 0.40 within the sweet zone
+                score = float(np.exp(-6.0 * (ratio - 0.40) ** 2))
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -322,12 +355,9 @@ class MelodyCoherenceScorer:
             max_entropy = np.log2(len(unique)) if len(unique) > 1 else 1.0
             normalised_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
 
-            # Continuous: ramp from 0 to 0.5 at 0.2, then 0.5 to 1.0 above
-            # At threshold=0.2: 0.3+0.2=0.50, ramp gives 0.2/0.2*0.50=0.50
-            if normalised_entropy >= 0.2:
-                entropy_score = min(1.0, 0.3 + normalised_entropy)
-            else:
-                entropy_score = max(0.0, normalised_entropy / 0.2 * 0.5)
+            # Bell curve peaked at 0.7 normalised entropy — reward moderate
+            # variety, penalize single-note and random-note extremes
+            entropy_score = float(np.exp(-8.0 * (normalised_entropy - 0.7) ** 2))
 
             # --- Intervallic consistency ---
             semitones = 12.0 * np.log2(voiced / voiced[0] + 1e-10)
@@ -337,8 +367,16 @@ class MelodyCoherenceScorer:
                 return float(np.clip(0.5 * entropy_score, 0.0, 1.0))
 
             unique_int, int_counts = np.unique(intervals, return_counts=True)
-            most_common_fraction = float(np.max(int_counts)) / len(intervals)
-            consistency_score = float(np.clip(most_common_fraction, 0.0, 1.0))
+            most_common_idx = np.argmax(int_counts)
+            most_common_interval = unique_int[most_common_idx]
+            most_common_fraction = float(int_counts[most_common_idx]) / len(intervals)
+
+            # Penalize unison dominance (most common interval == 0)
+            if most_common_interval == 0:
+                consistency_score = 0.2
+            else:
+                # Bell curve centered at 0.35 — moderate motif dominance
+                consistency_score = float(np.exp(-8.0 * (most_common_fraction - 0.35) ** 2))
 
             combined = 0.5 * entropy_score + 0.5 * consistency_score
             return float(np.clip(combined, 0.0, 1.0))

@@ -216,17 +216,17 @@ class NeuralQualityScorer:
             # Very short audio — neutral fallback
             duration = len(audio) / max(sr, 1)
             if duration < _MIN_DURATION:
-                return {k: 0.5 for k in NEURAL_QUALITY_WEIGHTS}
+                return {k: 0.0 for k in NEURAL_QUALITY_WEIGHTS}
 
             self._load()
 
-            # If model loading failed permanently, return neutral
+            # If model loading failed permanently, return zero
             if self._model is _LOAD_FAILED:
-                return {k: 0.5 for k in NEURAL_QUALITY_WEIGHTS}
+                return {k: 0.0 for k in NEURAL_QUALITY_WEIGHTS}
 
             hidden_states = self._extract_hidden_states(audio, sr)
             if hidden_states is None:
-                return {k: 0.5 for k in NEURAL_QUALITY_WEIGHTS}
+                return {k: 0.0 for k in NEURAL_QUALITY_WEIGHTS}
 
             return {
                 "temporal_coherence": self._score_temporal_coherence(hidden_states),
@@ -237,7 +237,7 @@ class NeuralQualityScorer:
 
         except Exception as exc:
             logger.error(f"Neural quality scoring failed: {exc}")
-            return {k: 0.5 for k in NEURAL_QUALITY_WEIGHTS}
+            return {k: 0.0 for k in NEURAL_QUALITY_WEIGHTS}
 
     def aggregate(self, scores: dict[str, float]) -> float:
         """
@@ -272,7 +272,7 @@ class NeuralQualityScorer:
             t_steps = last_layer.shape[0]
 
             if t_steps < 4:
-                return 0.5
+                return 0.0
 
             # Normalise each time-step embedding
             norms = torch.nn.functional.normalize(last_layer, dim=-1)
@@ -281,14 +281,14 @@ class NeuralQualityScorer:
             sims = (norms[:-1] * norms[1:]).sum(dim=-1)  # [T-1]
             mean_sim = float(sims.mean().item())
 
-            # Configurable bell curve (default: center=0.85, width=12.5)
+            # Configurable bell curve (default: center=0.85, width=40.0)
             score = float(np.exp(
                 -MERT_TEMPORAL_COHERENCE_WIDTH * (mean_sim - MERT_TEMPORAL_COHERENCE_CENTER) ** 2
             ))
             return float(np.clip(score, 0.0, 1.0))
 
         except Exception:
-            return 0.5
+            return 0.0
 
     @staticmethod
     def _score_activation_strength(hidden_states: list[torch.Tensor]) -> float:
@@ -306,11 +306,11 @@ class NeuralQualityScorer:
             norms = torch.norm(last_layer, dim=-1)  # [T]
             mean_norm = float(norms.mean().item())
 
-            score = min(mean_norm / _EXPECTED_NORM, 1.0)
+            score = 1.0 / (1.0 + np.exp(-8.0 * (mean_norm / _EXPECTED_NORM - 1.0)))
             return float(np.clip(score, 0.0, 1.0))
 
         except Exception:
-            return 0.5
+            return 0.0
 
     @staticmethod
     def _score_layer_agreement(hidden_states: list[torch.Tensor]) -> float:
@@ -330,7 +330,7 @@ class NeuralQualityScorer:
 
             n_layers = len(layer_vecs)
             if n_layers < 2:
-                return 0.5
+                return 0.0
 
             # Stack and normalise
             stacked = torch.stack(layer_vecs, dim=0)  # [n_layers, 768]
@@ -342,14 +342,14 @@ class NeuralQualityScorer:
             pairwise_sims = sim_matrix[mask]
             mean_sim = float(pairwise_sims.mean().item())
 
-            # Configurable bell curve (default: center=0.6, width=8.0)
+            # Configurable bell curve (default: center=0.6, width=25.0)
             score = float(np.exp(
                 -MERT_LAYER_AGREEMENT_WIDTH * (mean_sim - MERT_LAYER_AGREEMENT_CENTER) ** 2
             ))
             return float(np.clip(score, 0.0, 1.0))
 
         except Exception:
-            return 0.5
+            return 0.0
 
     @staticmethod
     def _score_structural_periodicity(hidden_states: list[torch.Tensor]) -> float:
@@ -366,7 +366,7 @@ class NeuralQualityScorer:
             t_steps = last_layer.shape[0]
 
             if t_steps < 8:
-                return 0.5
+                return 0.0
 
             # Normalise embeddings
             normed = torch.nn.functional.normalize(last_layer, dim=-1)
@@ -379,16 +379,16 @@ class NeuralQualityScorer:
                 autocorr.append(float(sim.item()))
 
             if not autocorr:
-                return 0.5
+                return 0.0
 
             # Peak strength = max autocorrelation excluding lag 0
             peak_strength = max(autocorr)
 
-            # Configurable bell curve (default: center=0.5, width=8.0)
+            # Configurable bell curve (default: center=0.5, width=25.0)
             score = float(np.exp(
                 -MERT_PERIODICITY_WIDTH * (peak_strength - MERT_PERIODICITY_CENTER) ** 2
             ))
             return float(np.clip(score, 0.0, 1.0))
 
         except Exception:
-            return 0.5
+            return 0.0

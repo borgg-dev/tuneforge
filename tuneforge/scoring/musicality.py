@@ -231,7 +231,7 @@ class MusicalityScorer:
             min_expected = min(min_expected, 12.0)
             # Continuous: ramp from 0 to 0.67 at threshold, then 0.67 to 1.0 above
             ratio = n_distinct / max(min_expected, 1.0)
-            variety_score = float(np.clip(ratio / 1.5, 0.0, 1.0))
+            variety_score = float(np.exp(-3.0 * (ratio - 1.0) ** 2))
 
             # Smoothness: mean cosine similarity between consecutive segments
             similarities = []
@@ -251,7 +251,7 @@ class MusicalityScorer:
 
             mean_sim = float(np.mean(similarities))
             # Continuous ramp: 0 at sim=0, 1.0 at sim=0.3, stays high above
-            smoothness_score = float(np.clip(mean_sim / 0.3, 0.0, 1.0))
+            smoothness_score = float(np.exp(-6.0 * (mean_sim - 0.6) ** 2))
 
             score = 0.5 * variety_score + 0.5 * smoothness_score
             return float(np.clip(score, 0.0, 1.0))
@@ -297,7 +297,7 @@ class MusicalityScorer:
             if len(beat_frames) < 2:
                 # Genre-aware floor for beat-less audio
                 if has_energy:
-                    return max(0.15, genre_floor)
+                    return 0.1 * genre_floor
                 return 0.0
 
             # Inter-beat intervals (in frames)
@@ -321,8 +321,8 @@ class MusicalityScorer:
                 strength_score = float(np.mean(beat_strengths) / max_onset)
 
             score = 0.5 * regularity_score + 0.5 * strength_score
-            # Ensure genre floor is respected
-            score = max(score, genre_floor)
+            # Soft genre floor blend instead of hard override
+            score = score * 0.85 + genre_floor * 0.15
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0
@@ -419,10 +419,7 @@ class MusicalityScorer:
             mean_coherence = float(np.mean(similarities))
             # Continuous: ramp from 0 at coherence=0 to 0.6 at 0.2, then up to 1.0
             # At threshold=0.2: 0.4+0.2=0.6, and ramp gives 0.2/0.2*0.6=0.6 → continuous
-            if mean_coherence >= 0.2:
-                coherence_score = min(1.0, 0.4 + mean_coherence)
-            else:
-                coherence_score = max(0.0, mean_coherence / 0.2 * 0.6)
+            coherence_score = float(np.exp(-6.0 * (mean_coherence - 0.6) ** 2))
 
             score = 0.5 * contrast_score + 0.5 * coherence_score
             return float(np.clip(score, 0.0, 1.0))

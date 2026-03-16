@@ -151,11 +151,11 @@ MERT_SAMPLE_RATE: int = 24000
 
 # MERT bell curve parameters
 MERT_TEMPORAL_COHERENCE_CENTER: float = 0.85
-MERT_TEMPORAL_COHERENCE_WIDTH: float = 12.5
+MERT_TEMPORAL_COHERENCE_WIDTH: float = 40.0
 MERT_LAYER_AGREEMENT_CENTER: float = 0.6
-MERT_LAYER_AGREEMENT_WIDTH: float = 8.0
+MERT_LAYER_AGREEMENT_WIDTH: float = 25.0
 MERT_PERIODICITY_CENTER: float = 0.5
-MERT_PERIODICITY_WIDTH: float = 8.0
+MERT_PERIODICITY_WIDTH: float = 25.0
 MERT_EXPECTED_NORM: float = 25.0
 
 # ---------------------------------------------------------------------------

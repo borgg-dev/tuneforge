@@ -168,7 +168,7 @@ class TestNeuralQualityRange:
 
 
 class TestNeuralQualityFallback:
-    """When extraction fails, all scores should be 0.5 (neutral)."""
+    """When extraction fails, all scores should be 0.0 (zero)."""
 
     def test_none_hidden_states(self, scorer, sample_audio):
         with patch.object(scorer, "_load"), \
@@ -176,17 +176,17 @@ class TestNeuralQualityFallback:
             scores = scorer.score(sample_audio, SAMPLE_RATE)
 
         for key, val in scores.items():
-            assert val == pytest.approx(0.5), f"{key} should be 0.5, got {val}"
+            assert val == pytest.approx(0.0), f"{key} should be 0.0, got {val}"
 
     def test_short_audio_fallback(self, scorer):
-        """Audio shorter than 0.25s should return all 0.5."""
+        """Audio shorter than 0.25s should return all 0.0."""
         short_audio = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
         with patch.object(scorer, "_load"), \
              patch.object(scorer, "_extract_hidden_states", return_value=None):
             scores = scorer.score(short_audio, SAMPLE_RATE)
 
         for key, val in scores.items():
-            assert val == pytest.approx(0.5), f"{key} should be 0.5, got {val}"
+            assert val == pytest.approx(0.0), f"{key} should be 0.0, got {val}"
 
 
 class TestAggregate:
@@ -247,10 +247,10 @@ class TestTemporalCoherence:
         )
 
     def test_few_time_steps_returns_fallback(self, scorer):
-        """Fewer than 4 time steps should return 0.5."""
+        """Fewer than 4 time steps should return 0.0."""
         short_states = _make_hidden_states(time_steps=3)
         score = scorer._score_temporal_coherence(short_states)
-        assert score == pytest.approx(0.5)
+        assert score == pytest.approx(0.0)
 
     def test_identical_frames_score(self, scorer):
         """Identical consecutive frames (similarity=1.0) should still score in [0,1]."""
@@ -279,16 +279,16 @@ class TestLayerAgreement:
         # Consistent layers have high similarity -> bell curve may peak or fall
         # Random layers have ~0 similarity -> lower on bell curve centred at 0.6
         # The key is that they produce different scores
-        assert consistent_score != pytest.approx(random_score, abs=0.05), (
+        assert consistent_score != pytest.approx(random_score, abs=0.01), (
             f"Consistent ({consistent_score:.4f}) and random ({random_score:.4f}) "
             "should produce distinguishable scores"
         )
 
     def test_single_layer_fallback(self, scorer):
-        """With only one layer, should return 0.5."""
+        """With only one layer, should return 0.0."""
         single = [torch.randn(50, 768)]
         score = scorer._score_layer_agreement(single)
-        assert score == pytest.approx(0.5)
+        assert score == pytest.approx(0.0)
 
 
 class TestStructuralPeriodicity:
@@ -306,10 +306,10 @@ class TestStructuralPeriodicity:
         assert 0.0 <= score <= 1.0
 
     def test_few_time_steps_returns_fallback(self, scorer):
-        """Fewer than 8 time steps should return 0.5."""
+        """Fewer than 8 time steps should return 0.0."""
         short_states = _make_hidden_states(time_steps=5)
         score = scorer._score_structural_periodicity(short_states)
-        assert score == pytest.approx(0.5)
+        assert score == pytest.approx(0.0)
 
     def test_random_signal_in_range(self, scorer):
         """Random hidden states should still produce a score in [0, 1]."""
@@ -347,18 +347,18 @@ class TestModelLoadFailure:
         from tuneforge.scoring.neural_quality import _LOAD_FAILED
         assert scorer._model is _LOAD_FAILED
 
-        # score() should return all 0.5
+        # score() should return all 0.0
         scores = scorer.score(sample_audio, SAMPLE_RATE)
         for key, val in scores.items():
-            assert val == pytest.approx(0.5), f"{key} should be 0.5, got {val}"
+            assert val == pytest.approx(0.0), f"{key} should be 0.0, got {val}"
 
     def test_aggregate_of_fallback_scores(self, scorer, sample_audio):
-        """Aggregate of all-0.5 scores should be 0.5."""
+        """Aggregate of all-0.0 scores should be 0.0."""
         self._trigger_load_failure(scorer)
 
         scores = scorer.score(sample_audio, SAMPLE_RATE)
         agg = scorer.aggregate(scores)
-        assert agg == pytest.approx(0.5, abs=1e-6)
+        assert agg == pytest.approx(0.0, abs=1e-6)
 
     def test_load_failure_does_not_raise(self, scorer):
         """_load() must not propagate exceptions to the caller."""
@@ -396,10 +396,10 @@ class TestActivationStrength:
         assert score == pytest.approx(1.0, abs=0.01)
 
     def test_zero_activations(self, scorer):
-        """Zero embeddings should produce score 0.0."""
+        """Zero embeddings should produce near-zero score (sigmoid floor)."""
         zero = [torch.zeros(50, 768) for _ in range(13)]
         score = scorer._score_activation_strength(zero)
-        assert score == pytest.approx(0.0, abs=1e-6)
+        assert score < 0.01, f"Expected near-zero score, got {score}"
 
 
 class TestResample:

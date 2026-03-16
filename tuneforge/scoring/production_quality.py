@@ -61,7 +61,7 @@ class ProductionQualityScorer:
                 stereo_scores = self._stereo.score(raw_audio, sr, genre=genre)
                 stereo_quality = self._stereo.aggregate(stereo_scores)
             else:
-                stereo_quality = 0.5  # Neutral default when no multichannel data
+                stereo_quality = 0.3  # Below-neutral default when no multichannel data
 
             if audio.ndim > 1:
                 audio = audio.mean(axis=0)
@@ -387,7 +387,7 @@ class ProductionQualityScorer:
             # Genre-aware calibrated target for normalized derivative std
             target = profile.dynamic_expressiveness_target
 
-            score = 1.0 - abs(norm_deriv_std - target) / target
+            score = float(np.exp(-50.0 * (norm_deriv_std - target) ** 2))
             return float(np.clip(score, 0.0, 1.0))
         except Exception:
             return 0.0

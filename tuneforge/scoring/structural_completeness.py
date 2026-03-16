@@ -159,8 +159,8 @@ class StructuralCompletenessScorer:
         try:
             n_sections = len(boundaries) - 1
             if n_sections < 2:
-                # Only one section — variety is undefined; give a neutral score
-                return 0.5
+                # Only one section — variety is undefined; penalize lightly
+                return 0.25
 
             hop_length = 512
             chroma = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=hop_length)
@@ -188,7 +188,7 @@ class StructuralCompletenessScorer:
                     distances.append(cos_dist)
 
             if not distances:
-                return 0.5
+                return 0.25
 
             mean_distance = float(np.mean(distances))
 
@@ -226,7 +226,7 @@ class StructuralCompletenessScorer:
         try:
             n_sections = len(boundaries) - 1
             if n_sections < 3:
-                return 0.5
+                return 0.25
 
             # Compute RMS per section
             section_rms = []
@@ -240,11 +240,11 @@ class StructuralCompletenessScorer:
 
             middle_rms_values = section_rms[1:-1]
             if not middle_rms_values:
-                return 0.5
+                return 0.25
 
             middle_avg_rms = float(np.mean(middle_rms_values))
             if middle_avg_rms < 1e-8:
-                return 0.5
+                return 0.25
 
             score = 0.0
 
@@ -306,24 +306,24 @@ class StructuralCompletenessScorer:
             # Need at least one interior boundary
             interior_boundaries = boundaries[1:-1]
             if not interior_boundaries:
-                return 0.5
+                return 0.25
 
             n_fft = 2048
             hop_length = 512
             S = np.abs(librosa.stft(audio, n_fft=n_fft, hop_length=hop_length))
 
             if S.shape[1] < 3:
-                return 0.5
+                return 0.25
 
             # Compute spectral flux for all frames
             flux = np.linalg.norm(np.diff(S, axis=1), axis=0)
 
             if len(flux) == 0:
-                return 0.5
+                return 0.25
 
             median_flux = float(np.median(flux))
             if median_flux < 1e-10:
-                return 0.5
+                return 0.25
 
             # Spectral flux at boundary frames
             boundary_fluxes = []
@@ -333,7 +333,7 @@ class StructuralCompletenessScorer:
                 boundary_fluxes.append(flux[frame_idx])
 
             if not boundary_fluxes:
-                return 0.5
+                return 0.25
 
             mean_boundary_flux = float(np.mean(boundary_fluxes))
             boundary_ratio = mean_boundary_flux / median_flux
