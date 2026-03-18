@@ -193,6 +193,65 @@ class DiffRhythmBackend:
         return prompt[:120]
 
     @staticmethod
+    def _generate_placeholder_lyrics(prompt: str, duration_seconds: float) -> str:
+        """Generate simple placeholder lyrics when vocals requested but no text provided.
+
+        DiffRhythm requires lyrics tokens to activate its vocal pathway —
+        empty lyrics always produce instrumental output. These placeholders
+        give the model something to vocalize while the style prompt controls the feel.
+        """
+        # Extract genre/mood from prompt for contextual placeholder lines
+        prompt_lower = prompt.lower()
+
+        lines = []
+        if "reggae" in prompt_lower or "ska" in prompt_lower:
+            lines = ["One love one heart", "Feel the rhythm tonight",
+                      "Sun is shining bright", "Everything gonna be alright",
+                      "Music sets us free", "Dancing in the moonlight"]
+        elif "blues" in prompt_lower:
+            lines = ["Woke up this morning", "Got the blues again",
+                      "Walking down the road", "Singing my song",
+                      "The sky is turning gray", "But I keep moving on"]
+        elif "rock" in prompt_lower or "metal" in prompt_lower:
+            lines = ["Rise up stand tall", "Breaking through the wall",
+                      "Fire in the night", "We will never fall",
+                      "Hear the thunder call", "Running with the storm"]
+        elif "jazz" in prompt_lower:
+            lines = ["La da da da", "Ooh bah dee bah",
+                      "Swing it to the moon", "Scat ba dee doo wah",
+                      "Night falls softly down", "The melody goes on"]
+        elif "hip" in prompt_lower or "rap" in prompt_lower:
+            lines = ["Yeah we rolling now", "Step up to the mic",
+                      "Feel the bass drop down", "Moving through the night",
+                      "Hands up in the air", "We run the city tonight"]
+        elif "pop" in prompt_lower:
+            lines = ["Oh oh oh tonight", "Dancing under stars",
+                      "You and me together", "Never falling apart",
+                      "La la la la la", "This is how we shine"]
+        else:
+            lines = ["La la la la la", "Oh oh oh oh oh",
+                      "Singing in the light", "Feel the music flow",
+                      "Na na na na na", "The melody goes on",
+                      "Ooh ooh ooh ooh", "Carry on the song"]
+
+        # Distribute across duration
+        num_lines = min(len(lines), max(int(duration_seconds / 10), 4))
+        selected = lines[:num_lines]
+
+        start_time = 5.0
+        end_time = duration_seconds * 0.85
+        interval = max((end_time - start_time) / max(len(selected), 1), 3.0)
+
+        lrc_lines = []
+        for i, line in enumerate(selected):
+            t = start_time + i * interval
+            mins = int(t // 60)
+            secs = t % 60
+            lrc_lines.append(f"[{mins:02d}:{secs:05.2f}]{line}")
+
+        return "\n".join(lrc_lines)
+
+    @staticmethod
     def _ensure_lrc_format(lyrics: str, duration_seconds: float) -> str:
         """Convert plain text lyrics to LRC format if not already timestamped.
 
@@ -277,8 +336,12 @@ class DiffRhythmBackend:
             # DiffRhythm's parse_lyrics expects [MM:SS.ss] timestamps on each line
             lyrics = self._ensure_lrc_format(lyrics, duration_seconds)
         elif lyrics == "[Vocals]":
-            # Vocal requested but no specific lyrics
-            lyrics = ""
+            # Vocal requested but no specific lyrics — generate placeholder vocals.
+            # DiffRhythm is lyrics-conditioned: empty lyrics = instrumental output.
+            # We generate simple repeated vocal syllables so the model activates
+            # its vocal pathway. The actual words don't matter much — the style
+            # prompt controls the musical feel.
+            lyrics = self._generate_placeholder_lyrics(prompt, duration_seconds)
         else:
             # No lyrics provided — default to instrumental
             lyrics = "[Instrumental]"

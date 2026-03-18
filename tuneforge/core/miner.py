@@ -130,7 +130,8 @@ class TuneForgeMiner(BaseMinerNeuron):
             logger.info(
                 f"[CHALLENGE] {synapse.challenge_id}: "
                 f"prompt='{enhanced_prompt[:100]}', "
-                f"duration={synapse.duration_seconds}s"
+                f"duration={synapse.duration_seconds}s, "
+                f"vocals={synapse.vocals_requested}, lyrics={'yes' if synapse.lyrics else 'no'}"
             )
 
             audio, sr, wav_bytes, elapsed_ms = self._generate_audio(
