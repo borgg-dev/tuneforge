@@ -16,7 +16,7 @@
   Validators issue challenges, score the returned audio across 16 quality signals with penalty<br/>
   multipliers, and set on-chain weights that determine α emissions. The scoring pipeline is<br/>
   model-agnostic — it evaluates the audio, not the architecture. Miners ship with MusicGen Large,<br/>
-  Stable Audio Open, ACE-Step 1.5, and DiffRhythm v1.2 as baselines, but the ones earning real weight will be the ones who bring<br/>
+  Stable Audio Open and DiffRhythm v1.2 as baselines, but the ones earning real weight will be the ones who bring<br/>
   better models, fine-tune aggressively, or build something entirely new.</p>
 
   <p><strong>Testnet netuid: 234</strong> · <strong>Mainnet: TBD</strong></p>
@@ -44,7 +44,7 @@ The network runs in repeating validation rounds. Each round:
 
 1. **Challenge** -- The validator generates a text-to-music prompt (tempo, key, genre, instruments, duration) from a combinatorial space of 100k+ possible challenges and sends it to a batch of miners via Bittensor dendrite.
 
-2. **Generate** -- Each miner runs its generation backend (MusicGen, Stable Audio, ACE-Step, DiffRhythm, or any custom model), produces audio, and returns it via axon.
+2. **Generate** -- Each miner runs its generation backend (MusicGen, Stable Audio, DiffRhythm, or any custom model), produces audio, and returns it via axon.
 
 3. **Score** -- The validator runs the audio through 16 weighted scorers covering prompt adherence, composition, production quality, naturalness, and more. Penalty multipliers (duration, artifacts, FAD, fingerprint) are applied on top. Multi-scale evaluation adjusts weights based on audio duration, and genre-aware profiles set appropriate quality targets.
 
@@ -215,7 +215,7 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `HF_TOKEN` | str | None | HuggingFace token (required for gated models like Stable Audio) |
-| `TF_MODEL_NAME` | str | facebook/musicgen-large | Generation model (`facebook/musicgen-large`, `stable_audio`, `ace-step-1.5`, `diffrhythm`, `diffrhythm-full`) |
+| `TF_MODEL_NAME` | str | facebook/musicgen-large | Generation model (`facebook/musicgen-large`, `stable_audio`, `diffrhythm`, `diffrhythm-full`) |
 | `TF_GENERATION_MAX_DURATION` | int | 30 | Max duration (seconds) |
 | `TF_GENERATION_SAMPLE_RATE` | int | 32000 | Sample rate (Hz) |
 | `TF_GENERATION_TIMEOUT` | int | 120 | Generation timeout (seconds) |
@@ -291,7 +291,6 @@ tuneforge/
 │   │   ├── model_manager.py        -- Backend manager (lazy load, GPU monitor)
 │   │   ├── musicgen_backend.py     -- MusicGen backend (default)
 │   │   ├── stable_audio_backend.py -- Stable Audio backend
-│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend
 │   │   ├── diffrhythm_backend.py   -- DiffRhythm v1.2 backend
 │   │   ├── audio_utils.py          -- Audio normalization, encoding
 │   │   └── prompt_parser.py        -- Prompt builder

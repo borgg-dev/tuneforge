@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, ACE-Step 1.5, DiffRhythm, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, DiffRhythm, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
@@ -26,7 +26,7 @@ A TuneForge miner performs the following:
 |-------|-----|------|-----|-----|------|----------|
 | **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | Default baseline, highest quality from MusicGen family |
 | **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
-| **Budget (Stable Audio / ACE-Step / DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
+| **Budget (Stable Audio / DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
 | **Entry (MusicGen Small)** | RTX 3060 | 6 GB | 4 cores | 16 GB | 30 GB SSD | Testing and development only |
 
 **Network:** 50 Mbps up/down minimum. The miner must be reachable from the internet on its axon port.
@@ -37,7 +37,6 @@ A TuneForge miner performs the following:
 |-------|-----------------|-------------|--------------------| ------------|-------|
 | **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | Best baseline quality, 3.3B params |
 | Stable Audio Open 1.0 | `stable_audio` | ~6 GB | ~10-20s on 4090 | 44.1 kHz stereo | High-fidelity stereo, gated (requires HF login) |
-| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | ~10-15s on 4090 | 48 kHz stereo | Diffusion-based, vocal support |
 | DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | ~2-3s on 4090 | 44.1 kHz stereo | 18x faster than MusicGen, vocal+lyrics support, up to 95s |
 | DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
@@ -52,7 +51,6 @@ These are baseline models to get you started. The scoring system is model-agnost
 | Python packages + PyTorch + CUDA | ~8 GB | Installed once |
 | MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
 | Stable Audio model weights | ~4 GB | Only if using Stable Audio |
-| ACE-Step checkpoints | ~9.5 GB | Only if using ACE-Step |
 | DiffRhythm model weights | ~4 GB | Only if using DiffRhythm |
 | OS + system packages | ~4-5 GB | Depends on base image |
 | Logs, temp files, headroom | ~5 GB | Recommended buffer |
@@ -95,28 +93,6 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -e .
 ```
-
-### ACE-Step 1.5 Setup (Alternative Baseline)
-
-ACE-Step 1.5 is an alternative baseline model. It uses a diffusion-based architecture to produce 48kHz stereo audio. It requires its own repository to be cloned alongside tuneforge.
-
-```bash
-# Clone the ACE-Step repo (from the tuneforge parent directory)
-cd ..
-git clone https://github.com/AceStepAI/ACE-Step-1.5.git
-cd tuneforge
-
-# Install ACE-Step dependencies into the tuneforge venv
-pip install 'transformers>=4.51.0,<4.58.0' einops vector-quantize-pytorch diffusers
-```
-
-The ACE-Step repo must be located at `~/ACE-Step-1.5` (the default path). To use a custom location, set the `ACESTEP_PATH` environment variable:
-
-```bash
-export ACESTEP_PATH=/path/to/ACE-Step-1.5
-```
-
-On first startup, the miner will automatically download the model checkpoints from HuggingFace (~9.5 GB total: DiT model, VAE, text encoder, language model). This happens once and the files are cached in the `ACE-Step-1.5/checkpoints/` directory.
 
 ### DiffRhythm v1.2 Setup (Alternative Baseline)
 
@@ -207,7 +183,6 @@ TuneForge is designed to be model-agnostic. If you have a custom music generatio
 
 See the existing backends for reference:
 - `tuneforge/generation/musicgen_backend.py`
-- `tuneforge/generation/ace_step_backend.py`
 - `tuneforge/generation/stable_audio_backend.py`
 - `tuneforge/generation/diffrhythm_backend.py`
 
@@ -313,7 +288,6 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo. Gated model -- requires HuggingFace login |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
-| ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Requires separate repo clone |
 | DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | Very fast | 44.1 kHz stereo | 18x faster, vocals+lyrics, up to 95s. Requires repo clone |
 | DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s. Requires repo clone |
 
@@ -352,10 +326,6 @@ TF_GENERATION_SAMPLE_RATE=44100
 TF_MODEL_NAME=facebook/musicgen-medium
 TF_GENERATION_SAMPLE_RATE=32000
 ```
-
-### ACE-Step Requirements
-
-ACE-Step requires the [ACE-Step-1.5 repository](https://github.com/AceStepAI/ACE-Step-1.5) cloned at `~/ACE-Step-1.5` (or set `ACESTEP_PATH` to a custom location). See [Installation](#ace-step-15-setup-alternative-baseline) above for setup instructions. The model checkpoints (~9.5 GB) are downloaded automatically on first run.
 
 ### DiffRhythm Requirements
 
@@ -578,12 +548,6 @@ hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='p
 
 > **Vast.ai note:** Jupyter notebook runs on port 8080 by default on Vast.ai instances. Kill it before starting the miner: `kill $(lsof -ti:8080)` and disable autostart: `sed -i 's/autostart=true/autostart=false/' /etc/supervisor/conf.d/jupyter.conf`
 
-For ACE-Step, verify the repo is cloned at `~/ACE-Step-1.5` and try:
-
-```bash
-cd ~/ACE-Step-1.5
-python3 -c "from acestep.model_downloader import download_models; download_models('checkpoints')"
-```
 
 ### Low Scores
 
@@ -616,10 +580,6 @@ Pull the latest code and restart:
 cd tuneforge
 git pull origin main
 pip install -e .
-
-# Also update ACE-Step if using it
-cd ~/ACE-Step-1.5
-git pull origin main
 
 # Also update DiffRhythm if using it
 cd ~/DiffRhythm
