@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, DiffRhythm, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, DiffRhythm, HeartMuLa, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
@@ -39,6 +39,8 @@ A TuneForge miner performs the following:
 | Stable Audio Open 1.0 | `stable_audio` | ~6 GB | ~10-20s on 4090 | 44.1 kHz stereo | High-fidelity stereo, gated (requires HF login) |
 | DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | ~2-3s on 4090 | 44.1 kHz stereo | 18x faster than MusicGen, vocal+lyrics support, up to 95s |
 | DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s |
+| HeartMuLa 3B | `heartmula` | ~8-10 GB | ~10-30s on 4090 | 48 kHz | Vocals+lyrics, great prompt adherence, comparable to Suno |
+| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | ~20-60s on 4090 | 48 kHz | Higher quality vocals+lyrics, best prompt adherence |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only |
 
@@ -141,6 +143,24 @@ print('Done!')
 
 The MuQ style encoder (~2 GB) is also downloaded automatically on first run. Set `TF_MODEL_NAME=diffrhythm` for the base model or `TF_MODEL_NAME=diffrhythm-full` for the full-length model, and `TF_GENERATION_SAMPLE_RATE=44100`.
 
+### HeartMuLa Setup (Recommended for Vocals)
+
+HeartMuLa is an LLM-based music generation model (Llama 3.2 backbone) with excellent prompt adherence, genre matching, and lyrics/vocal support. It produces 48kHz audio comparable to Suno in quality. Available in 3B (~8-10GB VRAM) and 7B (~16-20GB VRAM) versions.
+
+```bash
+# Install heartlib
+git clone https://github.com/HeartMuLa/heartlib.git
+cd heartlib && pip install -e .
+cd ..
+
+# Download model checkpoints (3 repos required)
+huggingface-cli download --local-dir ~/heartmula-ckpt HeartMuLa/HeartMuLaGen
+huggingface-cli download --local-dir ~/heartmula-ckpt/HeartMuLa-oss-3B HeartMuLa/HeartMuLa-oss-3B-happy-new-year
+huggingface-cli download --local-dir ~/heartmula-ckpt/HeartCodec-oss HeartMuLa/HeartCodec-oss-20260123
+```
+
+Set `TF_MODEL_NAME=heartmula` (3B) or `TF_MODEL_NAME=heartmula-7b` (7B), and `TF_GENERATION_SAMPLE_RATE=48000`. To use a custom checkpoint path, set `HEARTMULA_MODEL_PATH=/path/to/ckpt`.
+
 ### MusicGen Setup (Default Baseline)
 
 MusicGen Large is the default baseline model (~16GB VRAM, 3.3B parameters). For GPUs with less than 16GB VRAM, use `facebook/musicgen-medium` instead. Install audiocraft separately because it pins specific torch versions:
@@ -198,6 +218,7 @@ See the existing backends for reference:
 - `tuneforge/generation/musicgen_backend.py`
 - `tuneforge/generation/stable_audio_backend.py`
 - `tuneforge/generation/diffrhythm_backend.py`
+- `tuneforge/generation/heartmula_backend.py`
 - `tuneforge/generation/lyrics_generator.py` (lyrics generation + prompt analysis)
 
 ---
@@ -304,6 +325,8 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
 | DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | Very fast | 44.1 kHz stereo | 18x faster, vocals+lyrics, up to 95s. Requires repo clone |
 | DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s. Requires repo clone |
+| HeartMuLa 3B | `heartmula` | ~8-10 GB | Moderate | 48 kHz | **Recommended for vocals.** Best prompt adherence + lyrics. Requires heartlib |
+| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | Moderate | 48 kHz | Higher quality version. Requires heartlib + more VRAM |
 
 ### Custom Models
 
@@ -335,6 +358,14 @@ TF_GENERATION_SAMPLE_RATE=44100
 # Or DiffRhythm v1.2 full (up to 4m45s, ~8-10GB VRAM)
 TF_MODEL_NAME=diffrhythm-full
 TF_GENERATION_SAMPLE_RATE=44100
+
+# Or HeartMuLa 3B (vocals + great prompt adherence, ~8-10GB VRAM)
+TF_MODEL_NAME=heartmula
+TF_GENERATION_SAMPLE_RATE=48000
+
+# Or HeartMuLa 7B (highest quality vocals, ~16-20GB VRAM)
+TF_MODEL_NAME=heartmula-7b
+TF_GENERATION_SAMPLE_RATE=48000
 
 # Or MusicGen Medium (for GPUs with <16GB VRAM)
 TF_MODEL_NAME=facebook/musicgen-medium
