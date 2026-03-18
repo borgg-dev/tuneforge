@@ -192,6 +192,48 @@ class DiffRhythmBackend:
         # Fallback: truncate to first meaningful chunk
         return prompt[:120]
 
+    @staticmethod
+    def _ensure_lrc_format(lyrics: str, duration_seconds: float) -> str:
+        """Convert plain text lyrics to LRC format if not already timestamped.
+
+        DiffRhythm's parse_lyrics expects lines like [00:05.00]Hello world.
+        If the user provides plain text, we distribute lines evenly across
+        the song duration with auto-generated timestamps.
+        """
+        lines = [l.strip() for l in lyrics.strip().split("\n") if l.strip()]
+        if not lines:
+            return ""
+
+        # Check if already in LRC format (first line starts with [MM:SS)
+        if lines[0].startswith("[") and ":" in lines[0][:10]:
+            return lyrics  # Already LRC formatted
+
+        # Filter out section headers like [Verse 1], [Chorus] — keep them as context
+        content_lines = []
+        for line in lines:
+            # Skip pure section markers but keep lines with actual text
+            if line.startswith("[") and line.endswith("]"):
+                continue
+            content_lines.append(line)
+
+        if not content_lines:
+            return ""
+
+        # Distribute lines evenly across the duration
+        # Start at 5s, end at 90% of duration, evenly spaced
+        start_time = 5.0
+        end_time = duration_seconds * 0.9
+        interval = max((end_time - start_time) / max(len(content_lines), 1), 2.0)
+
+        lrc_lines = []
+        for i, line in enumerate(content_lines):
+            t = start_time + i * interval
+            mins = int(t // 60)
+            secs = t % 60
+            lrc_lines.append(f"[{mins:02d}:{secs:05.2f}]{line}")
+
+        return "\n".join(lrc_lines)
+
     def generate(
         self,
         prompt: str,
@@ -231,8 +273,9 @@ class DiffRhythmBackend:
 
         # Handle lyrics/vocals
         if lyrics and lyrics not in ("[Instrumental]", "[Vocals]"):
-            # User provided actual lyrics — pass them through
-            pass
+            # User provided actual lyrics — convert to LRC format if needed
+            # DiffRhythm's parse_lyrics expects [MM:SS.ss] timestamps on each line
+            lyrics = self._ensure_lrc_format(lyrics, duration_seconds)
         elif lyrics == "[Vocals]":
             # Vocal requested but no specific lyrics
             lyrics = ""
