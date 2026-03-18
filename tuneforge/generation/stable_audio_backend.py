@@ -88,6 +88,7 @@ class StableAudioBackend:
         top_k: int = 250,
         top_p: float = 0.0,
         seed: int | None = None,
+        **kwargs,  # Accept and ignore extra params (lyrics, etc.)
     ) -> tuple[np.ndarray, int]:
         """Generate audio from a text prompt.
 
