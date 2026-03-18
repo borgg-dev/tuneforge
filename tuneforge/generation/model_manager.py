@@ -20,7 +20,7 @@ class ModelManager:
     at runtime. Only one backend is loaded at a time to conserve GPU memory.
     """
 
-    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "stable_audio", "diffrhythm")
+    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "stable_audio", "diffrhythm", "heartmula")
 
     def __init__(
         self,
@@ -115,6 +115,13 @@ class ModelManager:
 
             use_full = self._model_size == "full"
             backend = DiffRhythmBackend(device=self._device, use_full_model=use_full)
+        elif name == "heartmula":
+            from tuneforge.generation.heartmula_backend import HeartMuLaBackend
+
+            backend = HeartMuLaBackend(
+                device=self._device,
+                version=self._model_size if self._model_size in ("3B", "7B") else "3B",
+            )
         else:
             raise ValueError(f"Unknown backend: {name}")
 

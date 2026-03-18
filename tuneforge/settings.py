@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # Music generation configuration
     model_name: str = Field(
         default="facebook/musicgen-large",
-        description="Music generation model (facebook/musicgen-large, stable_audio, diffrhythm, diffrhythm-full)"
+        description="Music generation model (facebook/musicgen-large, stable_audio, diffrhythm, diffrhythm-full, heartmula, heartmula-7b)"
     )
     generation_max_duration: int = Field(
         default=30,

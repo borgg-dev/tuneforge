@@ -47,7 +47,10 @@ class TuneForgeMiner(BaseMinerNeuron):
 
         # Parse model backend from model_name
         model_name = self.settings.model_name
-        if "diffrhythm" in model_name.lower() or "diff-rhythm" in model_name.lower() or "diff_rhythm" in model_name.lower():
+        if "heartmula" in model_name.lower() or "heart-mula" in model_name.lower() or "heart_mula" in model_name.lower():
+            model_size = "7B" if "7b" in model_name.lower() else "3B"
+            backend = "heartmula"
+        elif "diffrhythm" in model_name.lower() or "diff-rhythm" in model_name.lower() or "diff_rhythm" in model_name.lower():
             # DiffRhythm: "diffrhythm-full" for 285s, "diffrhythm" for 95s base
             model_size = "full" if "full" in model_name.lower() else "base"
             backend = "diffrhythm"
