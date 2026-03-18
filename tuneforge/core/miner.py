@@ -70,6 +70,10 @@ class TuneForgeMiner(BaseMinerNeuron):
         self._audio_utils = AudioUtils()
         self._prompt_parser = PromptParser()
 
+        # Lyrics generator — used by any backend when vocals requested without lyrics
+        from tuneforge.generation.lyrics_generator import LyricsGenerator
+        self._lyrics_gen = LyricsGenerator(device=self.settings.gpu_device)
+
         # Generation tracking
         self._generations_completed: int = 0
         self._errors_last_hour: int = 0
@@ -79,6 +83,10 @@ class TuneForgeMiner(BaseMinerNeuron):
         # Preload model so first challenge doesn't timeout on download/load
         logger.info(f"Preloading {backend} model...")
         self._model_manager.preload()
+
+        # Preload lyrics generator
+        logger.info("Preloading lyrics generator...")
+        self._lyrics_gen.load()
 
         logger.info(
             f"TuneForgeMiner initialized: backend={backend}, "
@@ -224,10 +232,21 @@ class TuneForgeMiner(BaseMinerNeuron):
             float(self.settings.generation_max_duration),
         )
 
-        # Pass lyrics/vocals info for backends that support it (DiffRhythm)
+        # Handle lyrics/vocals — applies to ALL backends
+        from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
         lyrics = synapse.lyrics
         if not lyrics and synapse.vocals_requested:
-            lyrics = "[Vocals]"  # Signal vocal generation without specific lyrics
+            # User wants vocals but didn't provide lyrics — generate from prompt
+            logger.info("Generating lyrics from prompt (vocals requested, no lyrics)")
+            genre = extract_genre(prompt) or synapse.genre
+            mood = extract_mood(prompt) or synapse.mood
+            lyrics = self._lyrics_gen.generate(
+                prompt=prompt,
+                genre=genre,
+                mood=mood,
+                duration_seconds=duration,
+            )
+            logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
 
         audio, sr = self._model_manager.generate(
             prompt=prompt,
@@ -414,6 +433,8 @@ class TuneForgeMiner(BaseMinerNeuron):
         logger.info("Shutting down TuneForgeMiner…")
         try:
             self._model_manager.unload_all()
+            if self._lyrics_gen:
+                self._lyrics_gen.unload()
         except Exception as exc:
             logger.error(f"Error unloading models: {exc}")
         super().shutdown()
