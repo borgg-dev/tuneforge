@@ -37,11 +37,13 @@ class OrganicGenerateRequest(BaseModel):
     genre: str | None = Field(default=None)
     mood: str | None = Field(default=None)
     tempo_bpm: int | None = Field(default=None, ge=20, le=300)
-    duration_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
+    duration_seconds: float = Field(default=15.0, ge=1.0, le=180.0)
     key_signature: str | None = Field(default=None)
     instruments: list[str] | None = Field(default=None)
     num_variations: int = Field(default=1, ge=1, le=5)
     format: str = Field(default="wav", pattern=r"^(mp3|wav|ogg|flac)$")
+    lyrics: str | None = Field(default=None, max_length=5000)
+    vocals_requested: bool = Field(default=False)
 
 
 class OrganicTrack(BaseModel):
@@ -164,6 +166,8 @@ def create_validator_api(validator: "TuneForgeValidator") -> FastAPI:
                 duration_seconds=request.duration_seconds,
                 key_signature=request.key_signature,
                 instruments=request.instruments,
+                lyrics=request.lyrics,
+                vocals_requested=request.vocals_requested,
                 request_id=request_id,
             )
         except Exception as exc:

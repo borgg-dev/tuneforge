@@ -679,6 +679,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
         duration_seconds: float = 15.0,
         key_signature: str | None = None,
         instruments: list[str] | None = None,
+        lyrics: str | None = None,
+        vocals_requested: bool = False,
         request_id: str = "",
     ) -> list[dict[str, Any]]:
         """Fan out an organic request to top-K miners, rank by EMA, return best.
@@ -696,7 +698,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
             return await self._run_organic_generation_inner(
                 prompt=prompt, genre=genre, mood=mood, tempo_bpm=tempo_bpm,
                 duration_seconds=duration_seconds, key_signature=key_signature,
-                instruments=instruments, request_id=request_id,
+                instruments=instruments, lyrics=lyrics,
+                vocals_requested=vocals_requested, request_id=request_id,
             )
         finally:
             self._organic_active_count -= 1
@@ -715,6 +718,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
         duration_seconds: float = 15.0,
         key_signature: str | None = None,
         instruments: list[str] | None = None,
+        lyrics: str | None = None,
+        vocals_requested: bool = False,
         request_id: str = "",
     ) -> list[dict[str, Any]]:
         """Inner implementation of organic generation (counter managed by caller)."""
@@ -736,6 +741,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
             duration_seconds=duration_seconds,
             key_signature=key_signature,
             instruments=instruments,
+            lyrics=lyrics,
+            vocals_requested=vocals_requested,
             challenge_id=request_id or hashlib.md5(prompt.encode()).hexdigest()[:16],
         )
 
