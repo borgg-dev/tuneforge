@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, ACE-Step 1.5, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, ACE-Step 1.5, DiffRhythm, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
@@ -26,7 +26,7 @@ A TuneForge miner performs the following:
 |-------|-----|------|-----|-----|------|----------|
 | **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | Default baseline, highest quality from MusicGen family |
 | **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
-| **Budget (Stable Audio / ACE-Step)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
+| **Budget (Stable Audio / ACE-Step / DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
 | **Entry (MusicGen Small)** | RTX 3060 | 6 GB | 4 cores | 16 GB | 30 GB SSD | Testing and development only |
 
 **Network:** 50 Mbps up/down minimum. The miner must be reachable from the internet on its axon port.
@@ -38,6 +38,8 @@ A TuneForge miner performs the following:
 | **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | Best baseline quality, 3.3B params |
 | Stable Audio Open 1.0 | `stable_audio` | ~6 GB | ~10-20s on 4090 | 44.1 kHz stereo | High-fidelity stereo, gated (requires HF login) |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | ~10-15s on 4090 | 48 kHz stereo | Diffusion-based, vocal support |
+| DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | ~2-3s on 4090 | 44.1 kHz stereo | 18x faster than MusicGen, vocal+lyrics support, up to 95s |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only |
 
@@ -51,6 +53,7 @@ These are baseline models to get you started. The scoring system is model-agnost
 | MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
 | Stable Audio model weights | ~4 GB | Only if using Stable Audio |
 | ACE-Step checkpoints | ~9.5 GB | Only if using ACE-Step |
+| DiffRhythm model weights | ~4 GB | Only if using DiffRhythm |
 | OS + system packages | ~4-5 GB | Depends on base image |
 | Logs, temp files, headroom | ~5 GB | Recommended buffer |
 
@@ -115,6 +118,29 @@ export ACESTEP_PATH=/path/to/ACE-Step-1.5
 
 On first startup, the miner will automatically download the model checkpoints from HuggingFace (~9.5 GB total: DiT model, VAE, text encoder, language model). This happens once and the files are cached in the `ACE-Step-1.5/checkpoints/` directory.
 
+### DiffRhythm v1.2 Setup (Alternative Baseline)
+
+DiffRhythm is a latent diffusion model that generates full-length songs at 44.1kHz stereo. It is 18x faster than MusicGen, uses only 6-8GB VRAM, and supports vocals with lyrics. Two variants are available: base (up to 95s) and full (up to 4m45s).
+
+```bash
+# Clone the DiffRhythm repo
+git clone https://github.com/ASLP-lab/DiffRhythm ~/DiffRhythm
+
+# Install system dependency (required for lyrics phonemizer)
+apt install espeak-ng
+
+# Install DiffRhythm dependencies into the tuneforge venv
+pip install -r ~/DiffRhythm/requirements.txt
+```
+
+The DiffRhythm repo must be located at `~/DiffRhythm` (the default path). To use a custom location, set the `DIFFRHYTHM_PATH` environment variable:
+
+```bash
+export DIFFRHYTHM_PATH=/path/to/DiffRhythm
+```
+
+On first startup, the miner will automatically download the model weights from HuggingFace (~4 GB for base, ~4 GB for full, plus the VAE). Set `TF_MODEL_NAME=diffrhythm` for the base model or `TF_MODEL_NAME=diffrhythm-full` for the full-length model, and `TF_GENERATION_SAMPLE_RATE=44100`.
+
 ### MusicGen Setup (Default Baseline)
 
 MusicGen Large is the default baseline model (~16GB VRAM, 3.3B parameters). For GPUs with less than 16GB VRAM, use `facebook/musicgen-medium` instead. Install audiocraft separately because it pins specific torch versions:
@@ -160,6 +186,7 @@ See the existing backends for reference:
 - `tuneforge/generation/musicgen_backend.py`
 - `tuneforge/generation/ace_step_backend.py`
 - `tuneforge/generation/stable_audio_backend.py`
+- `tuneforge/generation/diffrhythm_backend.py`
 
 ---
 
@@ -264,6 +291,8 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
 | ACE-Step 1.5 | `ace-step-1.5` | ~6 GB | Fast | 48 kHz stereo | Requires separate repo clone |
+| DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | Very fast | 44.1 kHz stereo | 18x faster, vocals+lyrics, up to 95s. Requires repo clone |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s. Requires repo clone |
 
 ### Custom Models
 
@@ -288,6 +317,14 @@ TF_GENERATION_SAMPLE_RATE=32000
 TF_MODEL_NAME=stable_audio
 TF_GENERATION_SAMPLE_RATE=44100
 
+# Or DiffRhythm v1.2 base (up to 95s, ~6-8GB VRAM, 18x faster)
+TF_MODEL_NAME=diffrhythm
+TF_GENERATION_SAMPLE_RATE=44100
+
+# Or DiffRhythm v1.2 full (up to 4m45s, ~8-10GB VRAM)
+TF_MODEL_NAME=diffrhythm-full
+TF_GENERATION_SAMPLE_RATE=44100
+
 # Or MusicGen Medium (for GPUs with <16GB VRAM)
 TF_MODEL_NAME=facebook/musicgen-medium
 TF_GENERATION_SAMPLE_RATE=32000
@@ -296,6 +333,10 @@ TF_GENERATION_SAMPLE_RATE=32000
 ### ACE-Step Requirements
 
 ACE-Step requires the [ACE-Step-1.5 repository](https://github.com/AceStepAI/ACE-Step-1.5) cloned at `~/ACE-Step-1.5` (or set `ACESTEP_PATH` to a custom location). See [Installation](#ace-step-15-setup-alternative-baseline) above for setup instructions. The model checkpoints (~9.5 GB) are downloaded automatically on first run.
+
+### DiffRhythm Requirements
+
+DiffRhythm requires the [DiffRhythm repository](https://github.com/ASLP-lab/DiffRhythm) cloned at `~/DiffRhythm` (or set `DIFFRHYTHM_PATH` to a custom location), plus the `espeak-ng` system package. See [Installation](#diffrhythm-v12-setup-alternative-baseline) above for setup instructions. Model weights (~4 GB) are downloaded automatically from HuggingFace on first run.
 
 ---
 
@@ -460,7 +501,7 @@ The miner exposes health information via `HealthReportSynapse`, which includes G
 
 ### CUDA Out of Memory
 
-MusicGen Large requires ~16 GB VRAM. If you run out of memory, try Stable Audio Open (~6GB) or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
+MusicGen Large requires ~16 GB VRAM. If you run out of memory, try DiffRhythm (~6-8GB), Stable Audio Open (~6GB), or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small
@@ -543,6 +584,10 @@ pip install -e .
 
 # Also update ACE-Step if using it
 cd ~/ACE-Step-1.5
+git pull origin main
+
+# Also update DiffRhythm if using it
+cd ~/DiffRhythm
 git pull origin main
 ```
 
