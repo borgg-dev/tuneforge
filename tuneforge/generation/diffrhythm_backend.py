@@ -230,10 +230,22 @@ class DiffRhythmBackend:
             audio_length = 95  # Base model is fixed at 95s / 2048 frames
 
         # Handle lyrics/vocals
+        # Auto-detect vocal intent from prompt if not explicitly set
         if lyrics is None:
-            lyrics = "[Instrumental]"
+            vocal_keywords = [
+                "vocal", "vocals", "singing", "singer", "voice",
+                "lyrics", "lyric", "chorus", "verse", "rap",
+                "with a vocal", "with vocals", "sung", "sing",
+            ]
+            prompt_lower = prompt.lower()
+            wants_vocals = any(kw in prompt_lower for kw in vocal_keywords)
+            if wants_vocals:
+                lyrics = ""  # Empty = vocal generation without specific lyrics
+                logger.info("Auto-detected vocal intent from prompt")
+            else:
+                lyrics = "[Instrumental]"
         elif lyrics == "[Vocals]":
-            # Vocal requested but no specific lyrics — use empty LRC
+            # Vocal requested explicitly but no specific lyrics
             lyrics = ""
 
         # Build concise style prompt for MuQ-MuLan
