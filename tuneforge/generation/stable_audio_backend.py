@@ -22,6 +22,7 @@ class StableAudioBackend:
 
     MODEL_ID: str = "stabilityai/stable-audio-open-1.0"
     SAMPLE_RATE: int = 44100
+    SUPPORTS_VOCALS: bool = False
 
     def __init__(self, device: str = "cuda") -> None:
         """Initialize Stable Audio backend.

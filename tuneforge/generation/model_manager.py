@@ -76,6 +76,12 @@ class ModelManager:
         return backend.model_id
 
     @property
+    def supports_vocals(self) -> bool:
+        """Whether the active backend supports vocals/lyrics."""
+        backend = self._get_or_create_backend(self._active_backend_name)
+        return getattr(backend, "SUPPORTS_VOCALS", False)
+
+    @property
     def generation_count(self) -> int:
         """Total number of generations performed."""
         return self._generation_count

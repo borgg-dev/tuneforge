@@ -48,6 +48,7 @@ class DiffRhythmBackend:
     """
 
     SAMPLE_RATE: int = 44100
+    SUPPORTS_VOCALS: bool = True
     model_id: str = "DiffRhythm-v1.2"
 
     def __init__(

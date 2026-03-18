@@ -21,6 +21,7 @@ class MusicGenBackend:
     """
 
     SAMPLE_RATE: int = 32000
+    SUPPORTS_VOCALS: bool = False
 
     def __init__(
         self,

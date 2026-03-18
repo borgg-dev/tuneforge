@@ -26,6 +26,7 @@ class HeartMuLaBackend:
     """
 
     SAMPLE_RATE: int = 48000
+    SUPPORTS_VOCALS: bool = True
     model_id: str = "HeartMuLa-3B"
 
     def __init__(

@@ -73,9 +73,8 @@ class TuneForgeMiner(BaseMinerNeuron):
         self._audio_utils = AudioUtils()
         self._prompt_parser = PromptParser()
 
-        # Lyrics generator — used by any backend when vocals requested without lyrics
-        from tuneforge.generation.lyrics_generator import LyricsGenerator
-        self._lyrics_gen = LyricsGenerator(device=self.settings.gpu_device)
+        # Lyrics generator — only loaded if active backend supports vocals
+        self._lyrics_gen = None
 
         # Generation tracking
         self._generations_completed: int = 0
@@ -87,9 +86,14 @@ class TuneForgeMiner(BaseMinerNeuron):
         logger.info(f"Preloading {backend} model...")
         self._model_manager.preload()
 
-        # Preload lyrics generator
-        logger.info("Preloading lyrics generator...")
-        self._lyrics_gen.load()
+        # Preload lyrics generator only if backend supports vocals
+        if self._model_manager.supports_vocals:
+            from tuneforge.generation.lyrics_generator import LyricsGenerator
+            self._lyrics_gen = LyricsGenerator(device=self.settings.gpu_device)
+            logger.info("Preloading lyrics generator (backend supports vocals)...")
+            self._lyrics_gen.load()
+        else:
+            logger.info("Skipping lyrics generator (backend does not support vocals)")
 
         logger.info(
             f"TuneForgeMiner initialized: backend={backend}, "
@@ -235,21 +239,23 @@ class TuneForgeMiner(BaseMinerNeuron):
             float(self.settings.generation_max_duration),
         )
 
-        # Handle lyrics/vocals — applies to ALL backends
-        from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
-        lyrics = synapse.lyrics
-        if not lyrics and synapse.vocals_requested:
-            # User wants vocals but didn't provide lyrics — generate from prompt
-            logger.info("Generating lyrics from prompt (vocals requested, no lyrics)")
-            genre = extract_genre(prompt) or synapse.genre
-            mood = extract_mood(prompt) or synapse.mood
-            lyrics = self._lyrics_gen.generate(
-                prompt=prompt,
-                genre=genre,
-                mood=mood,
-                duration_seconds=duration,
-            )
-            logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
+        # Handle lyrics/vocals — only for backends that support them
+        lyrics = None
+        if self._model_manager.supports_vocals:
+            from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
+            lyrics = synapse.lyrics
+            if not lyrics and synapse.vocals_requested and self._lyrics_gen:
+                # User wants vocals but didn't provide lyrics — generate from prompt
+                logger.info("Generating lyrics from prompt (vocals requested, no lyrics)")
+                genre = extract_genre(prompt) or synapse.genre
+                mood = extract_mood(prompt) or synapse.mood
+                lyrics = self._lyrics_gen.generate(
+                    prompt=prompt,
+                    genre=genre,
+                    mood=mood,
+                    duration_seconds=duration,
+                )
+                logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
 
         audio, sr = self._model_manager.generate(
             prompt=prompt,
@@ -436,7 +442,7 @@ class TuneForgeMiner(BaseMinerNeuron):
         logger.info("Shutting down TuneForgeMiner…")
         try:
             self._model_manager.unload_all()
-            if self._lyrics_gen:
+            if self._lyrics_gen is not None:
                 self._lyrics_gen.unload()
         except Exception as exc:
             logger.error(f"Error unloading models: {exc}")
