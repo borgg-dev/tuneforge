@@ -827,18 +827,31 @@ class TuneForgeValidator(BaseValidatorNeuron):
         # Lightweight scoring — 5 key scorers to rank submissions by actual audio quality.
         # Uses same scoring models as challenges so miners can't game organic vs synthetic.
         # Must hold _scoring_lock to prevent concurrent GPU model access.
+        # If the lock is busy (challenge scoring in progress), wait up to 10s then
+        # fall back to EMA-based ranking — don't block the user indefinitely.
+        rewards = None
         try:
-            async with self._scoring_lock:
-                loop = asyncio.get_event_loop()
-                rewards = await loop.run_in_executor(
-                    self._scoring_executor,
-                    self._reward_model.score_batch_organic,
-                    valid_responses,
-                    valid_hotkeys,
-                )
+            acquired = await asyncio.wait_for(self._scoring_lock.acquire(), timeout=10.0)
+            if acquired:
+                try:
+                    loop = asyncio.get_event_loop()
+                    rewards = await loop.run_in_executor(
+                        self._scoring_executor,
+                        self._reward_model.score_batch_organic,
+                        valid_responses,
+                        valid_hotkeys,
+                    )
+                finally:
+                    self._scoring_lock.release()
+        except asyncio.TimeoutError:
+            logger.warning("[ORGANIC] Scoring lock busy (challenge scoring in progress), falling back to EMA ranking")
         except Exception as exc:
             logger.error("[ORGANIC] Scoring failed: {}", exc)
-            rewards = [0.0] * len(valid_responses)
+
+        if rewards is None:
+            # EMA fallback — use historical scores from challenge rounds
+            rewards = [float(self.settings.ema_scores.get(str(uid), 0.5)) for uid in valid_uids]
+            logger.info("[ORGANIC] Using EMA fallback for {} miners", len(rewards))
 
         # Build results ranked by score
         results: list[dict[str, Any]] = []
