@@ -668,7 +668,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
     ORGANIC_TIMEOUT: float = 60.0
 
     # Quick ping before organic generation to filter out dead miners.
-    ORGANIC_PING_TIMEOUT: float = 3.0
+    ORGANIC_PING_TIMEOUT: float = 10.0
 
     async def run_organic_generation(
         self,
