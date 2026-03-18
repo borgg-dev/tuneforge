@@ -824,44 +824,28 @@ class TuneForgeValidator(BaseValidatorNeuron):
         if not valid_responses:
             return []
 
-        # Lightweight scoring to rank submissions. Two safeguards to keep latency low:
-        # 1. Wait max 5s for the scoring lock (busy = challenge round scoring 66 miners)
-        # 2. Cap total scoring time at 15s (enough for lightweight 5-scorer pipeline)
-        # If either limit is hit, fall back to EMA-based ranking from prior rounds.
-        rewards = None
+        # Lightweight scoring — 5 key scorers to rank submissions by actual audio quality.
+        # Uses same scoring models as challenges so miners can't game organic vs synthetic.
+        # Must hold _scoring_lock to prevent concurrent GPU model access.
         try:
-            acquired = await asyncio.wait_for(self._scoring_lock.acquire(), timeout=5.0)
-            if acquired:
-                try:
-                    loop = asyncio.get_event_loop()
-                    rewards = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self._scoring_executor,
-                            self._reward_model.score_batch_organic,
-                            valid_responses,
-                            valid_hotkeys,
-                        ),
-                        timeout=15.0,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("[ORGANIC] Scoring took too long (>15s), using EMA fallback")
-                finally:
-                    self._scoring_lock.release()
-        except asyncio.TimeoutError:
-            logger.info("[ORGANIC] Scoring lock busy (>5s), using EMA fallback")
+            async with self._scoring_lock:
+                loop = asyncio.get_event_loop()
+                rewards = await loop.run_in_executor(
+                    self._scoring_executor,
+                    self._reward_model.score_batch_organic,
+                    valid_responses,
+                    valid_hotkeys,
+                )
         except Exception as exc:
             logger.error("[ORGANIC] Scoring failed: {}", exc)
+            rewards = [0.0] * len(valid_responses)
 
-        # Build results — use real scores if available, EMA fallback otherwise
+        # Build results ranked by score
         results: list[dict[str, Any]] = []
-        for i, (uid, hotkey, resp) in enumerate(zip(valid_uids, valid_hotkeys, valid_responses)):
+        for uid, hotkey, resp, score in zip(valid_uids, valid_hotkeys, valid_responses, rewards):
             audio_bytes = resp.deserialize()
             if audio_bytes is None:
                 continue
-            if rewards is not None:
-                score = rewards[i]
-            else:
-                score = float(self.settings.ema_scores.get(str(uid), 0.5))
             results.append({
                 "miner_uid": uid,
                 "miner_hotkey": hotkey,
