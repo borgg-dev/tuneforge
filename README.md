@@ -44,7 +44,7 @@ The network runs in repeating validation rounds. Each round:
 
 1. **Challenge** -- The validator generates a text-to-music prompt (tempo, key, genre, instruments, duration) from a combinatorial space of 100k+ possible challenges and sends it to a batch of miners via Bittensor dendrite.
 
-2. **Generate** -- Each miner runs its generation backend (MusicGen, Stable Audio, DiffRhythm, or any custom model), produces audio, and returns it via axon.
+2. **Generate** -- Each miner runs its generation backend (MusicGen, Stable Audio, DiffRhythm, or any custom model), produces audio, and returns it via axon. When vocals are requested without lyrics, the miner auto-generates contextual lyrics from the prompt using a lightweight text model (GPT-2).
 
 3. **Score** -- The validator runs the audio through 16 weighted scorers covering prompt adherence, composition, production quality, naturalness, and more. Penalty multipliers (duration, artifacts, FAD, fingerprint) are applied on top. Multi-scale evaluation adjusts weights based on audio duration, and genre-aware profiles set appropriate quality targets.
 
@@ -292,6 +292,7 @@ tuneforge/
 │   │   ├── musicgen_backend.py     -- MusicGen backend (default)
 │   │   ├── stable_audio_backend.py -- Stable Audio backend
 │   │   ├── diffrhythm_backend.py   -- DiffRhythm v1.2 backend
+│   │   ├── lyrics_generator.py    -- GPT-2 lyrics generation + genre/mood extraction
 │   │   ├── audio_utils.py          -- Audio normalization, encoding
 │   │   └── prompt_parser.py        -- Prompt builder
 │   ├── rewards/

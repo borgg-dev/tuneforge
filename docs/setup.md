@@ -852,6 +852,7 @@ tuneforge/
       musicgen_backend.py                # MusicGen generation backend
       stable_audio_backend.py            # Stable Audio generation backend
       diffrhythm_backend.py              # DiffRhythm v1.2 generation backend
+      lyrics_generator.py               # GPT-2 lyrics generation + genre/mood extraction
       prompt_parser.py                   # Prompt parsing utilities
     rewards/
       __init__.py

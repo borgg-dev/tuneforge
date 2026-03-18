@@ -52,6 +52,7 @@ These are baseline models to get you started. The scoring system is model-agnost
 | MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
 | Stable Audio model weights | ~4 GB | Only if using Stable Audio |
 | DiffRhythm model weights | ~4 GB | Only if using DiffRhythm |
+| Lyrics generator (GPT-2) | ~0.5 GB | Loaded automatically for vocal support |
 | OS + system packages | ~4-5 GB | Depends on base image |
 | Logs, temp files, headroom | ~5 GB | Recommended buffer |
 
@@ -177,14 +178,27 @@ Alternatively, you can set the `HF_TOKEN` environment variable in your `.env.min
 HF_TOKEN=hf_your_token_here
 ```
 
+### Vocals and Lyrics
+
+The miner automatically handles vocal requests regardless of which backend is used:
+
+- **Vocals with lyrics**: User provides lyrics text → miner passes them to the backend. For DiffRhythm, lyrics are auto-converted to LRC timestamp format.
+- **Vocals without lyrics**: User requests vocals but provides no lyrics → miner uses a built-in lyrics generator (GPT-2 small, ~500MB VRAM) to create contextual lyrics from the prompt. Genre and mood are extracted from the prompt text to generate relevant lyrics.
+- **Instrumental**: Default when vocals are not requested.
+
+The lyrics generator loads alongside the music model on the miner's GPU. GPT-2 small requires ~500MB additional VRAM. It runs once during initialization and stays in memory for fast lyrics generation (~2-3s per request).
+
+Backends that support vocals (like DiffRhythm) receive the generated lyrics via the `lyrics` parameter. Backends that don't support vocals (like MusicGen) simply ignore the parameter.
+
 ### Bringing Your Own Model
 
-TuneForge is designed to be model-agnostic. If you have a custom music generation model, you can integrate it by implementing a backend class that follows the same interface as the existing backends in `tuneforge/generation/`. Your model just needs to accept a text prompt and duration, and return an audio array with a sample rate.
+TuneForge is designed to be model-agnostic. If you have a custom music generation model, you can integrate it by implementing a backend class that follows the same interface as the existing backends in `tuneforge/generation/`. Your model just needs to accept a text prompt and duration, and return an audio array with a sample rate. If your model supports vocals, accept the `lyrics` keyword argument in your `generate()` method.
 
 See the existing backends for reference:
 - `tuneforge/generation/musicgen_backend.py`
 - `tuneforge/generation/stable_audio_backend.py`
 - `tuneforge/generation/diffrhythm_backend.py`
+- `tuneforge/generation/lyrics_generator.py` (lyrics generation + prompt analysis)
 
 ---
 
