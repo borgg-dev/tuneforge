@@ -139,7 +139,30 @@ The DiffRhythm repo must be located at `~/DiffRhythm` (the default path). To use
 export DIFFRHYTHM_PATH=/path/to/DiffRhythm
 ```
 
-On first startup, the miner will automatically download the model weights from HuggingFace (~4 GB for base, ~4 GB for full, plus the VAE). Set `TF_MODEL_NAME=diffrhythm` for the base model or `TF_MODEL_NAME=diffrhythm-full` for the full-length model, and `TF_GENERATION_SAMPLE_RATE=44100`.
+Pre-download model weights before starting the miner to avoid timeout on first startup:
+
+```bash
+cd ~/DiffRhythm
+source /path/to/tuneforge/venv/bin/activate
+
+# For full model (recommended):
+python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', filename='cfm_model.pt', local_dir='pretrained')
+hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='pretrained')
+print('Done!')
+"
+
+# For base model:
+python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download('ASLP-lab/DiffRhythm-1_2', filename='cfm_model.pt', local_dir='pretrained')
+hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='pretrained')
+print('Done!')
+"
+```
+
+The MuQ style encoder (~2 GB) is also downloaded automatically on first run. Set `TF_MODEL_NAME=diffrhythm` for the base model or `TF_MODEL_NAME=diffrhythm-full` for the full-length model, and `TF_GENERATION_SAMPLE_RATE=44100`.
 
 ### MusicGen Setup (Default Baseline)
 
@@ -542,6 +565,18 @@ You can pre-download the model before starting the miner to avoid PM2 restart is
 ```bash
 HF_TOKEN=hf_your_token python3 -c "from huggingface_hub import snapshot_download; snapshot_download('stabilityai/stable-audio-open-1.0')"
 ```
+
+For DiffRhythm, verify the repo is cloned at `~/DiffRhythm`, `espeak-ng` is installed, and pre-download weights:
+
+```bash
+cd ~/DiffRhythm && python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', filename='cfm_model.pt', local_dir='pretrained')
+hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='pretrained')
+"
+```
+
+> **Vast.ai note:** Jupyter notebook runs on port 8080 by default on Vast.ai instances. Kill it before starting the miner: `kill $(lsof -ti:8080)` and disable autostart: `sed -i 's/autostart=true/autostart=false/' /etc/supervisor/conf.d/jupyter.conf`
 
 For ACE-Step, verify the repo is cloned at `~/ACE-Step-1.5` and try:
 
