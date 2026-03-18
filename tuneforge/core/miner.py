@@ -223,6 +223,11 @@ class TuneForgeMiner(BaseMinerNeuron):
             float(self.settings.generation_max_duration),
         )
 
+        # Pass lyrics/vocals info for backends that support it (DiffRhythm)
+        lyrics = synapse.lyrics
+        if not lyrics and synapse.vocals_requested:
+            lyrics = "[Vocals]"  # Signal vocal generation without specific lyrics
+
         audio, sr = self._model_manager.generate(
             prompt=prompt,
             duration=duration,
@@ -231,6 +236,7 @@ class TuneForgeMiner(BaseMinerNeuron):
             temperature=self.settings.temperature,
             top_k=self.settings.top_k,
             top_p=self.settings.top_p,
+            lyrics=lyrics,
         )
 
         audio = self._audio_utils.normalize(audio)

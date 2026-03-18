@@ -130,6 +130,68 @@ class DiffRhythmBackend:
     def is_loaded(self) -> bool:
         return self._loaded
 
+    @staticmethod
+    def _build_style_prompt(prompt: str) -> str:
+        """Extract a concise style description from a verbose prompt.
+
+        DiffRhythm's MuQ-MuLan style encoder works best with short,
+        descriptive style phrases, not long structured prompts.
+        """
+        # If the prompt is already short, use as-is
+        if len(prompt) <= 120:
+            return prompt
+
+        # Extract the most important style keywords from a verbose prompt
+        # Focus on genre, mood, instruments, and style descriptors
+        parts = []
+        prompt_lower = prompt.lower()
+
+        # Extract genre if present
+        genres = [
+            "reggae", "rock", "pop", "jazz", "blues", "hip-hop", "rap",
+            "electronic", "edm", "house", "techno", "ambient", "classical",
+            "folk", "country", "r&b", "soul", "funk", "metal", "punk",
+            "lo-fi", "lofi", "cinematic", "orchestral", "latin", "bossa nova",
+            "psychedelic", "indie", "alternative", "gospel", "ska",
+        ]
+        for g in genres:
+            if g in prompt_lower:
+                parts.append(g)
+                break
+
+        # Extract mood
+        moods = [
+            "energetic", "chill", "dark", "uplifting", "melancholic", "dreamy",
+            "aggressive", "peaceful", "romantic", "epic", "happy", "sad",
+            "groovy", "mellow", "intense", "hopeful", "nostalgic",
+        ]
+        for m in moods:
+            if m in prompt_lower:
+                parts.append(m)
+                break
+
+        # Extract key instruments
+        instruments = [
+            "piano", "guitar", "drums", "bass", "synth", "strings", "brass",
+            "vocals", "vocal", "flute", "violin", "saxophone", "organ",
+            "trumpet", "harmonica", "sitar", "tabla",
+        ]
+        found_instruments = [i for i in instruments if i in prompt_lower]
+        if found_instruments:
+            parts.extend(found_instruments[:3])
+
+        # If we extracted meaningful parts, build a concise style prompt
+        if parts:
+            style = ", ".join(parts)
+            # Add the original short text if it has additional context
+            first_sentence = prompt.split(".")[0].split(",")[0].strip()
+            if len(first_sentence) < 80 and first_sentence.lower() not in style.lower():
+                return f"{first_sentence}, {style}"
+            return style
+
+        # Fallback: truncate to first meaningful chunk
+        return prompt[:120]
+
     def generate(
         self,
         prompt: str,
@@ -142,10 +204,11 @@ class DiffRhythmBackend:
         """Generate audio from a text prompt.
 
         Args:
-            prompt: Style description (e.g. "Jazzy nightclub vibe, saxophone solo").
+            prompt: Style description or full generation prompt.
             duration_seconds: Desired audio duration in seconds.
             seed: Random seed for reproducibility.
-            lyrics: Optional LRC-format lyrics. Use "[Instrumental]" for no vocals.
+            lyrics: Optional LRC-format lyrics, "[Vocals]" for vocal without lyrics,
+                    or None/\"[Instrumental]\" for instrumental.
             guidance_scale: Not directly exposed (hardcoded in DiffRhythm at 4.0).
             **kwargs: Additional params (ignored).
 
@@ -166,11 +229,19 @@ class DiffRhythmBackend:
         else:
             audio_length = 95  # Base model is fixed at 95s / 2048 frames
 
+        # Handle lyrics/vocals
         if lyrics is None:
             lyrics = "[Instrumental]"
+        elif lyrics == "[Vocals]":
+            # Vocal requested but no specific lyrics — use empty LRC
+            lyrics = ""
+
+        # Build concise style prompt for MuQ-MuLan
+        style_prompt_text = self._build_style_prompt(prompt)
 
         logger.info(
-            f"Generating: prompt='{prompt[:80]}...', "
+            f"Generating: style='{style_prompt_text[:80]}', "
+            f"lyrics={'[has lyrics]' if lyrics and lyrics != '[Instrumental]' else '[instrumental]'}, "
             f"duration={duration_seconds}s, audio_length={audio_length}, seed={seed}"
         )
         t0 = time.time()
@@ -194,8 +265,9 @@ class DiffRhythmBackend:
                     if torch.cuda.is_available():
                         torch.cuda.manual_seed(seed)
 
-                # Style from text prompt
-                style_prompt = get_style_prompt(self._muq, prompt=prompt)
+                # Style from concise text prompt (MuQ-MuLan works best with short descriptions)
+                logger.debug(f"Style prompt: '{style_prompt_text}'")
+                style_prompt = get_style_prompt(self._muq, prompt=style_prompt_text)
                 negative_style_prompt = get_negative_style_prompt(self.device)
 
                 # No editing — generate from scratch
