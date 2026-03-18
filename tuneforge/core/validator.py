@@ -775,8 +775,8 @@ class TuneForgeValidator(BaseValidatorNeuron):
             alive_uids = miner_uids
 
         if not alive_uids:
-            logger.warning("[ORGANIC] No miners responded to ping — no miners to query")
-            return []
+            logger.warning("[ORGANIC] No miners responded to ping — trying all candidates anyway")
+            alive_uids = miner_uids
 
         logger.info(
             "[ORGANIC] Querying {} alive miners (of {} candidates, {} serving) for request {}",
