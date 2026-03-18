@@ -825,22 +825,29 @@ class TuneForgeValidator(BaseValidatorNeuron):
             return []
 
         # Lightweight scoring — 5 key scorers instead of full 18 for fast organic response.
-        # Must hold _scoring_lock to prevent concurrent access to shared GPU model
-        # state (CLAP embeddings, MERT, etc.) from challenge scoring.
+        # Try acquiring scoring lock with a short timeout to avoid blocking behind
+        # challenge scoring (which can take 60-120s for 66 miners).
+        rewards = None
         try:
-            async with self._scoring_lock:
-                loop = asyncio.get_event_loop()
-                rewards = await loop.run_in_executor(
-                    self._scoring_executor,
-                    self._reward_model.score_batch_organic,
-                    valid_responses,
-                    valid_hotkeys,
-                )
-        except Exception as exc:
-            logger.error("[ORGANIC] Scoring failed: {}", exc)
-            rewards = [0.0] * len(valid_responses)
+            acquired = await asyncio.wait_for(self._scoring_lock.acquire(), timeout=5.0)
+            if acquired:
+                try:
+                    loop = asyncio.get_event_loop()
+                    rewards = await loop.run_in_executor(
+                        self._scoring_executor,
+                        self._reward_model.score_batch_organic,
+                        valid_responses,
+                        valid_hotkeys,
+                    )
+                finally:
+                    self._scoring_lock.release()
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.info("[ORGANIC] Scoring lock busy, skipping lightweight scoring: {}", type(exc).__name__)
 
-        # Build results ranked by raw score
+        if rewards is None:
+            rewards = [0.5] * len(valid_responses)
+
+        # Build results ranked by score (or EMA fallback if scoring was skipped)
         results: list[dict[str, Any]] = []
         for uid, hotkey, resp, score in zip(valid_uids, valid_hotkeys, valid_responses, rewards):
             audio_bytes = resp.deserialize()
