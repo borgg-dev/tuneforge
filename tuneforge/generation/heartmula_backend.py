@@ -82,9 +82,6 @@ class HeartMuLaBackend:
                 lazy_load=False,
             )
 
-            # Apply post-load optimizations for faster inference
-            self._apply_optimizations()
-
             self._loaded = True
             elapsed = time.time() - t0
             logger.info(f"HeartMuLa model loaded in {elapsed:.1f}s")
