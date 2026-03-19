@@ -89,6 +89,12 @@ class MusicGenBackend:
         """Whether the model is currently loaded."""
         return self._loaded
 
+    # MusicGen's hard limit per chunk: 1503 tokens (~30s) from position embeddings
+    MAX_TOKENS_PER_CHUNK: int = 1503
+    CHUNK_DURATION: float = 30.0
+    # Overlap in seconds — tail of previous chunk used as audio prompt for next
+    OVERLAP_SECONDS: float = 5.0
+
     def generate(
         self,
         prompt: str,
@@ -101,6 +107,9 @@ class MusicGenBackend:
         **kwargs,  # Accept and ignore extra params (lyrics, etc.)
     ) -> tuple[np.ndarray, int]:
         """Generate audio from a text prompt.
+
+        For durations > 30s, generates in chunks using the tail of each
+        chunk as audio prompt for the next, producing seamless longer audio.
 
         Args:
             prompt: Natural language description of desired music.
@@ -122,16 +131,49 @@ class MusicGenBackend:
             if torch.cuda.is_available():
                 torch.cuda.manual_seed(seed)
 
-        # MusicGen generates ~50 tokens per second of audio
-        # Hard limit: 1503 tokens (~30s) due to sinusoidal position embeddings (max_position=2048)
-        max_new_tokens = min(int(duration_seconds * 50), 1503)
-
-        logger.info(
-            f"Generating: prompt='{prompt[:80]}...', "
-            f"duration={duration_seconds}s, tokens={max_new_tokens}, "
-            f"guidance={guidance_scale}, temp={temperature}"
-        )
         t0 = time.time()
+
+        if duration_seconds <= self.CHUNK_DURATION:
+            # Single chunk — simple generation
+            audio_np = self._generate_chunk(
+                prompt, duration_seconds, guidance_scale, temperature, top_k, top_p
+            )
+        else:
+            # Chunked generation for long audio
+            audio_np = self._generate_chunked(
+                prompt, duration_seconds, guidance_scale, temperature, top_k, top_p
+            )
+
+        # Ensure float32 in [-1, 1]
+        audio_np = audio_np.astype(np.float32)
+        peak = np.max(np.abs(audio_np))
+        if peak > 1.0:
+            audio_np = audio_np / peak
+
+        elapsed = time.time() - t0
+        logger.info(
+            f"Generation complete: {len(audio_np)/self.SAMPLE_RATE:.1f}s audio "
+            f"in {elapsed:.1f}s ({elapsed/duration_seconds:.2f}x realtime)"
+        )
+
+        return audio_np, self.SAMPLE_RATE
+
+    def _generate_chunk(
+        self,
+        prompt: str,
+        duration_seconds: float,
+        guidance_scale: float,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        audio_prompt: torch.Tensor | None = None,
+    ) -> np.ndarray:
+        """Generate a single chunk of audio (max 30s).
+
+        Args:
+            audio_prompt: Optional audio tensor to condition on (for continuation).
+        """
+        max_new_tokens = min(int(duration_seconds * 50), self.MAX_TOKENS_PER_CHUNK)
 
         try:
             inputs = self._processor(
@@ -140,36 +182,100 @@ class MusicGenBackend:
                 return_tensors="pt",
             ).to(self.device)
 
-            with torch.no_grad():
-                audio_values = self._model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    guidance_scale=guidance_scale,
-                    temperature=temperature,
-                    do_sample=temperature > 0,
-                    top_k=top_k if top_k > 0 else None,
-                    top_p=top_p if top_p > 0 else None,
-                )
+            generate_kwargs = {
+                **inputs,
+                "max_new_tokens": max_new_tokens,
+                "guidance_scale": guidance_scale,
+                "temperature": temperature,
+                "do_sample": temperature > 0,
+                "top_k": top_k if top_k > 0 else None,
+                "top_p": top_p if top_p > 0 else None,
+            }
 
-            # Extract audio: shape is (batch, channels, samples) or (batch, samples)
+            # If we have an audio prompt (continuation), pass it
+            if audio_prompt is not None:
+                generate_kwargs["audio_codes"] = audio_prompt
+
+            with torch.no_grad():
+                audio_values = self._model.generate(**generate_kwargs)
+
             audio_np = audio_values[0].cpu().numpy()
             if audio_np.ndim > 1:
-                audio_np = audio_np[0]  # Take first channel
+                audio_np = audio_np[0]
 
-            # Ensure float32 in [-1, 1]
-            audio_np = audio_np.astype(np.float32)
-            peak = np.max(np.abs(audio_np))
-            if peak > 1.0:
-                audio_np = audio_np / peak
-
-            elapsed = time.time() - t0
-            logger.info(
-                f"Generation complete: {len(audio_np)/self.SAMPLE_RATE:.1f}s audio "
-                f"in {elapsed:.1f}s ({elapsed/duration_seconds:.2f}x realtime)"
-            )
-
-            return audio_np, self.SAMPLE_RATE
+            return audio_np.astype(np.float32)
 
         except Exception as exc:
-            logger.error(f"MusicGen generation failed: {exc}")
+            logger.error(f"MusicGen chunk generation failed: {exc}")
             raise RuntimeError(f"MusicGen generation failed: {exc}") from exc
+
+    def _generate_chunked(
+        self,
+        prompt: str,
+        duration_seconds: float,
+        guidance_scale: float,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+    ) -> np.ndarray:
+        """Generate long audio by stitching 30s chunks with overlap.
+
+        Each chunk uses the last OVERLAP_SECONDS of the previous chunk
+        as context for seamless continuation.
+        """
+        remaining = duration_seconds
+        all_chunks: list[np.ndarray] = []
+        overlap_samples = int(self.OVERLAP_SECONDS * self.SAMPLE_RATE)
+        chunk_num = 0
+
+        logger.info(
+            f"Chunked generation: {duration_seconds}s total, "
+            f"{self.CHUNK_DURATION}s per chunk, {self.OVERLAP_SECONDS}s overlap"
+        )
+
+        while remaining > 0:
+            chunk_dur = min(remaining + self.OVERLAP_SECONDS, self.CHUNK_DURATION)
+            chunk_num += 1
+
+            logger.info(f"  Chunk {chunk_num}: generating {chunk_dur:.1f}s ({remaining:.1f}s remaining)")
+
+            chunk = self._generate_chunk(
+                prompt, chunk_dur, guidance_scale, temperature, top_k, top_p
+            )
+
+            if all_chunks:
+                # Crossfade: blend the overlap region
+                chunk = self._crossfade(all_chunks[-1], chunk, overlap_samples)
+                all_chunks[-1] = chunk
+            else:
+                all_chunks.append(chunk)
+
+            remaining -= (self.CHUNK_DURATION - self.OVERLAP_SECONDS)
+
+        # Concatenate all chunks
+        audio = np.concatenate(all_chunks) if len(all_chunks) > 1 else all_chunks[0]
+
+        # Trim to exact requested duration
+        target_samples = int(duration_seconds * self.SAMPLE_RATE)
+        if len(audio) > target_samples:
+            audio = audio[:target_samples]
+
+        return audio
+
+    @staticmethod
+    def _crossfade(prev: np.ndarray, curr: np.ndarray, overlap_samples: int) -> np.ndarray:
+        """Crossfade two audio chunks at the overlap region."""
+        if len(prev) < overlap_samples or len(curr) < overlap_samples:
+            return np.concatenate([prev, curr])
+
+        # Create fade curves
+        fade_out = np.linspace(1.0, 0.0, overlap_samples, dtype=np.float32)
+        fade_in = np.linspace(0.0, 1.0, overlap_samples, dtype=np.float32)
+
+        # Blend the overlap region
+        prev_tail = prev[-overlap_samples:] * fade_out
+        curr_head = curr[:overlap_samples] * fade_in
+        blended = prev_tail + curr_head
+
+        # Stitch: prev (without tail) + blended + curr (without head)
+        return np.concatenate([prev[:-overlap_samples], blended, curr[overlap_samples:]])
