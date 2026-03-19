@@ -825,41 +825,16 @@ class TuneForgeValidator(BaseValidatorNeuron):
         if not valid_responses:
             return []
 
-        # Lightweight scoring — 5 key scorers to rank submissions by actual audio quality.
-        # Uses same scoring models as challenges so miners can't game organic vs synthetic.
-        # Must hold _scoring_lock to prevent concurrent GPU model access.
-        # If the lock is busy (challenge scoring in progress), wait up to 10s then
-        # fall back to EMA-based ranking — don't block the user indefinitely.
-        rewards = None
-        try:
-            acquired = await asyncio.wait_for(self._scoring_lock.acquire(), timeout=10.0)
-            if acquired:
-                try:
-                    loop = asyncio.get_event_loop()
-                    rewards = await loop.run_in_executor(
-                        self._scoring_executor,
-                        self._reward_model.score_batch_organic,
-                        valid_responses,
-                        valid_hotkeys,
-                    )
-                finally:
-                    self._scoring_lock.release()
-        except asyncio.TimeoutError:
-            logger.warning("[ORGANIC] Scoring lock busy (challenge scoring in progress), falling back to EMA ranking")
-        except Exception as exc:
-            logger.error("[ORGANIC] Scoring failed: {}", exc)
-
-        if rewards is None:
-            # EMA fallback — use historical scores from challenge rounds
-            rewards = [float(self.settings.ema_scores.get(str(uid), 0.5)) for uid in valid_uids]
-            logger.info("[ORGANIC] Using EMA fallback for {} miners", len(rewards))
-
-        # Build results ranked by score
+        # Rank by EMA — no synchronous scoring. EMA is built from hundreds of
+        # challenge rounds and reliably reflects miner quality. Background full
+        # scoring (below) updates EMA continuously so it stays accurate.
+        # This eliminates 60-120s of scoring latency from every organic request.
         results: list[dict[str, Any]] = []
-        for uid, hotkey, resp, score in zip(valid_uids, valid_hotkeys, valid_responses, rewards):
+        for uid, hotkey, resp in zip(valid_uids, valid_hotkeys, valid_responses):
             audio_bytes = resp.deserialize()
             if audio_bytes is None:
                 continue
+            ema = float(self.settings.ema_scores.get(str(uid), 0.5))
             results.append({
                 "miner_uid": uid,
                 "miner_hotkey": hotkey,
@@ -867,7 +842,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                 "sample_rate": resp.sample_rate or self.settings.generation_sample_rate,
                 "generation_time_ms": resp.generation_time_ms or 0,
                 "model_id": resp.model_id,
-                "composite_score": round(score, 4),
+                "composite_score": round(ema, 4),
                 "total_queried": len(alive_uids),
                 "total_valid": len(valid_responses),
             })
@@ -876,7 +851,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
         for i, r in enumerate(results[:5]):
             logger.info(
-                "[ORGANIC] #{}: UID {} score={:.4f} time={}ms",
+                "[ORGANIC] #{}: UID {} ema={:.4f} time={}ms",
                 i + 1, r["miner_uid"], r["composite_score"], r["generation_time_ms"],
             )
 
