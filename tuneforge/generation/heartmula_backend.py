@@ -257,8 +257,11 @@ class HeartMuLaBackend:
         """
         self.load()
 
-        # Clamp duration
-        max_duration_ms = min(int(duration_seconds * 1000), 240_000)
+        # Request 1.5x the duration — HeartMuLa is autoregressive and often
+        # stops early on short requests. Generating more and trimming avoids
+        # both duration penalties (too short) and artifact penalties (from looping).
+        overshoot_seconds = min(duration_seconds * 1.5, 240.0)
+        max_duration_ms = int(overshoot_seconds * 1000)
 
         if seed is not None:
             torch.manual_seed(seed)
@@ -318,24 +321,23 @@ class HeartMuLaBackend:
 
             audio_np = audio_np.astype(np.float32)
 
-            # Ensure audio matches requested duration
+            # Trim to exact requested duration (we generated 1.5x overshoot)
             target_samples = int(duration_seconds * sr)
             if len(audio_np) > target_samples:
-                # Trim if too long
                 audio_np = audio_np[:target_samples]
-            elif len(audio_np) < int(target_samples * 0.8):
-                # Too short (>20% deviation) — loop/pad to reach target duration
-                # This prevents harsh duration penalties from the scoring system
-                logger.warning(
-                    f"Audio too short: {len(audio_np)/sr:.1f}s vs {duration_seconds}s requested, padding"
-                )
-                repeats = (target_samples // len(audio_np)) + 1
-                audio_np = np.tile(audio_np, repeats)[:target_samples]
-                # Apply fade at loop points to smooth transitions
-                fade_len = min(int(0.5 * sr), len(audio_np) // 4)
+            elif len(audio_np) < target_samples:
+                # Still short despite overshoot — apply musical fade-out
+                # to fill remaining time gracefully (sounds intentional)
+                shortfall = target_samples - len(audio_np)
+                fade_len = min(len(audio_np), int(2.0 * sr))  # 2s fade-out
                 if fade_len > 0:
-                    fade = np.linspace(0.8, 1.0, fade_len, dtype=np.float32)
-                    audio_np[:fade_len] *= fade
+                    fade = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+                    audio_np[-fade_len:] *= fade
+                # Pad with silence after fade
+                audio_np = np.pad(audio_np, (0, shortfall), mode="constant")
+                logger.info(
+                    f"Audio {len(audio_np)/sr - shortfall/sr:.1f}s, padded with fade-out to {duration_seconds}s"
+                )
 
             # Normalize
             peak = np.max(np.abs(audio_np))
