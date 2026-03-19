@@ -93,69 +93,21 @@ class HeartMuLaBackend:
             raise RuntimeError(f"HeartMuLa model load failed: {exc}") from exc
 
     def _apply_optimizations(self) -> None:
-        """Apply 4-bit quantization and torch.compile to the backbone.
+        """Apply torch.compile to the backbone for faster inference.
 
-        - 4-bit NF4 quantization via bitsandbytes: replaces nn.Linear layers
-          in the backbone with bnb.nn.Linear4bit. ~40-50% faster inference,
-          negligible quality loss.
-        - torch.compile: optimizes the compute graph for ~20-30% additional
-          speedup. Zero quality impact.
+        torch.compile optimizes the compute graph for ~20-30% speedup
+        with zero quality impact. Uses 'max-autotune' mode for best
+        performance on repeated generations.
         """
-        import torch.nn as nn
-
         model = self._pipe.mula
 
-        # --- 4-bit quantization ---
-        try:
-            import bitsandbytes as bnb
-
-            quantized_count = 0
-            for name, module in list(model.backbone.named_modules()):
-                if isinstance(module, nn.Linear):
-                    # Get parent module and attribute name
-                    parts = name.rsplit(".", 1)
-                    if len(parts) == 2:
-                        parent_name, attr_name = parts
-                        parent = dict(model.backbone.named_modules())[parent_name]
-                    else:
-                        parent = model.backbone
-                        attr_name = name
-
-                    # Replace with 4-bit quantized linear
-                    quant_linear = bnb.nn.Linear4bit(
-                        module.in_features,
-                        module.out_features,
-                        bias=module.bias is not None,
-                        compute_dtype=torch.bfloat16,
-                        quant_type="nf4",
-                    )
-                    quant_linear.weight = bnb.nn.Params4bit(
-                        module.weight.data,
-                        requires_grad=False,
-                        quant_type="nf4",
-                        compress_statistics=True,
-                    )
-                    if module.bias is not None:
-                        quant_linear.bias = module.bias
-
-                    setattr(parent, attr_name, quant_linear)
-                    quantized_count += 1
-
-            logger.info(f"Quantized {quantized_count} linear layers in backbone to 4-bit NF4")
-
-        except ImportError:
-            logger.warning("bitsandbytes not available — skipping 4-bit quantization")
-        except Exception as exc:
-            logger.warning(f"4-bit quantization failed (non-fatal): {exc}")
-
-        # --- torch.compile ---
         try:
             model.backbone = torch.compile(
                 model.backbone,
-                mode="reduce-overhead",
+                mode="max-autotune",
                 fullgraph=False,
             )
-            logger.info("torch.compile applied to backbone (reduce-overhead mode)")
+            logger.info("torch.compile applied to backbone (max-autotune mode)")
         except Exception as exc:
             logger.warning(f"torch.compile failed (non-fatal): {exc}")
 
