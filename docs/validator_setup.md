@@ -59,7 +59,7 @@ With 10 miners per round and a 240-second round interval, GPU scoring leaves ple
 
 A single RTX 4090 (24 GB VRAM) can run both a MusicGen Large miner (~16 GB) and the validator scoring models (~5 GB) simultaneously. The miner generates audio during the round, then the validator scores it — the peak VRAM usage is ~21 GB since generation and scoring don't overlap.
 
-For GPUs with less VRAM (16 GB), use a lighter miner model (Stable Audio ~6 GB or DiffRhythm ~6-8 GB) alongside the validator (~5 GB) for a total of ~11-13 GB.
+For GPUs with less VRAM (16 GB), use a lighter miner model (DiffRhythm ~8-10 GB) alongside the validator (~5 GB) for a total of ~13-15 GB.
 
 ### Disk Space Breakdown
 

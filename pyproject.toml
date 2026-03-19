@@ -45,8 +45,6 @@ dependencies = [
     "psutil>=5.9.0",
     # HuggingFace model hub (downloads, auth for gated models)
     "huggingface-hub>=0.20.0",
-    # Stable Audio (diffusion scheduler requires torchsde)
-    "diffusers>=0.25.0",
     "torchsde>=0.2.5",
     # Audio processing
     "librosa>=0.10.0",

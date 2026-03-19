@@ -512,7 +512,7 @@ docker compose down
 
 Environment files are loaded via `env_file` directives: `.env.miner` for the miner and api services, `.env.validator` for the validator service.
 
-The miner Dockerfile pre-downloads the MusicGen Medium model at build time. For other backends (Stable Audio, DiffRhythm), pre-download weights before starting — see `docs/miner_setup.md` for instructions. The validator Dockerfile pre-downloads the `laion/clap-htsat-fused` CLAP model. This avoids download delays at first startup.
+The miner Dockerfile pre-downloads the MusicGen Medium model at build time. For other backends (DiffRhythm), pre-download weights before starting — see `docs/miner_setup.md` for instructions. The validator Dockerfile pre-downloads the `laion/clap-htsat-fused` CLAP model. This avoids download delays at first startup.
 
 ---
 
@@ -596,7 +596,7 @@ The environment variables below control only **operational** parameters.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Music generation model (`facebook/musicgen-large`, `stable_audio`, `diffrhythm`, `diffrhythm-full`, `heartmula`, `heartmula-7b`) |
+| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Music generation model (`facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b`) |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum generation duration (seconds) |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Miner-side timeout for generation requests (seconds) |
@@ -850,7 +850,6 @@ tuneforge/
       audio_utils.py                     # Audio processing utilities
       model_manager.py                   # Model loading and management
       musicgen_backend.py                # MusicGen generation backend
-      stable_audio_backend.py            # Stable Audio generation backend
       diffrhythm_backend.py              # DiffRhythm v1.2 generation backend
       heartmula_backend.py              # HeartMuLa generation backend (vocals + prompt adherence)
       lyrics_generator.py               # GPT-2 lyrics generation + genre/mood extraction

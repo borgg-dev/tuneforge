@@ -58,9 +58,6 @@ class TuneForgeMiner(BaseMinerNeuron):
             parts = model_name.split("-")
             model_size = parts[-1] if parts else "medium"
             backend = "musicgen"
-        elif "stable-audio" in model_name or "stable_audio" in model_name:
-            model_size = "medium"
-            backend = "stable_audio"
         else:
             model_size = "medium"
             backend = "musicgen"  # Default to MusicGen

@@ -2,7 +2,7 @@
 
 This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns α (alpha) rewards based on quality scores.
 
-**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Large and Stable Audio Open 1.0 are provided as baseline starting models, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
+**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Large is provided as a baseline starting model, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
 
 ---
 
@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, Stable Audio Open, DiffRhythm, HeartMuLa, or your own custom model).
+- Generates audio using a configurable backend (MusicGen Large, DiffRhythm, HeartMuLa, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
@@ -26,7 +26,7 @@ A TuneForge miner performs the following:
 |-------|-----|------|-----|-----|------|----------|
 | **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | Default baseline, highest quality from MusicGen family |
 | **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
-| **Budget (Stable Audio / DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
+| **Budget (DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
 | **Entry (MusicGen Small)** | RTX 3060 | 6 GB | 4 cores | 16 GB | 30 GB SSD | Testing and development only |
 
 **Network:** 50 Mbps up/down minimum. The miner must be reachable from the internet on its axon port.
@@ -36,9 +36,7 @@ A TuneForge miner performs the following:
 | Model | `TF_MODEL_NAME` | VRAM (fp16) | Speed (30s audio) | Sample Rate | Notes |
 |-------|-----------------|-------------|--------------------| ------------|-------|
 | **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | Best baseline quality, 3.3B params |
-| Stable Audio Open 1.0 | `stable_audio` | ~6 GB | ~10-20s on 4090 | 44.1 kHz stereo | High-fidelity stereo, gated (requires HF login) |
-| DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | ~2-3s on 4090 | 44.1 kHz stereo | 18x faster than MusicGen, vocal+lyrics support, up to 95s |
-| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s, vocal+lyrics support |
 | HeartMuLa 3B | `heartmula` | ~8-10 GB | ~10-30s on 4090 | 48 kHz | Vocals+lyrics, great prompt adherence, comparable to Suno |
 | HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | ~20-60s on 4090 | 48 kHz | Higher quality vocals+lyrics, best prompt adherence |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
@@ -52,7 +50,6 @@ These are baseline models to get you started. The scoring system is model-agnost
 |-----------|------|-------|
 | Python packages + PyTorch + CUDA | ~8 GB | Installed once |
 | MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
-| Stable Audio model weights | ~4 GB | Only if using Stable Audio |
 | DiffRhythm model weights | ~4 GB | Only if using DiffRhythm |
 | Lyrics generator (GPT-2) | ~0.5 GB | Loaded automatically for vocal support |
 | OS + system packages | ~4-5 GB | Depends on base image |
@@ -99,7 +96,7 @@ pip install -e .
 
 ### DiffRhythm v1.2 Setup (Alternative Baseline)
 
-DiffRhythm is a latent diffusion model that generates full-length songs at 44.1kHz stereo. It is 18x faster than MusicGen, uses only 6-8GB VRAM, and supports vocals with lyrics. Two variants are available: base (up to 95s) and full (up to 4m45s).
+DiffRhythm is a latent diffusion model that generates full-length songs at 44.1kHz stereo. It uses ~8-10GB VRAM and supports vocals with lyrics. The full variant generates songs up to 4m45s.
 
 ```bash
 # Clone the DiffRhythm repo
@@ -124,24 +121,15 @@ Pre-download model weights before starting the miner to avoid timeout on first s
 cd ~/DiffRhythm
 source /path/to/tuneforge/venv/bin/activate
 
-# For full model (recommended):
 python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', filename='cfm_model.pt', local_dir='pretrained')
 hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='pretrained')
 print('Done!')
 "
-
-# For base model:
-python3 -c "
-from huggingface_hub import hf_hub_download
-hf_hub_download('ASLP-lab/DiffRhythm-1_2', filename='cfm_model.pt', local_dir='pretrained')
-hf_hub_download('ASLP-lab/DiffRhythm-vae', filename='vae_model.pt', local_dir='pretrained')
-print('Done!')
-"
 ```
 
-The MuQ style encoder (~2 GB) is also downloaded automatically on first run. Set `TF_MODEL_NAME=diffrhythm` for the base model or `TF_MODEL_NAME=diffrhythm-full` for the full-length model, and `TF_GENERATION_SAMPLE_RATE=44100`.
+The MuQ style encoder (~2 GB) is also downloaded automatically on first run. Set `TF_MODEL_NAME=diffrhythm-full` and `TF_GENERATION_SAMPLE_RATE=44100`.
 
 ### HeartMuLa Setup (Recommended for Vocals)
 
@@ -171,33 +159,6 @@ pip install audiocraft --no-deps
 
 Model weights are downloaded automatically from HuggingFace on first run.
 
-### Stable Audio Open 1.0 Setup (Alternative Baseline)
-
-Stable Audio Open 1.0 is the recommended alternative baseline (~6GB VRAM, 44.1kHz stereo output). It uses a diffusion-based architecture and requires the `diffusers` library:
-
-```bash
-pip install diffusers
-```
-
-**Important:** Stable Audio Open 1.0 is a **gated model** on HuggingFace. Before using it, you must:
-
-1. Go to [stabilityai/stable-audio-open-1.0](https://huggingface.co/stabilityai/stable-audio-open-1.0) and accept the license agreement.
-2. Create a HuggingFace access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-3. Log in on your miner machine:
-
-```bash
-pip install huggingface_hub
-huggingface-cli login
-```
-
-Once authenticated, model weights are downloaded automatically on first run. Set `TF_MODEL_NAME=stable_audio` and `TF_GENERATION_SAMPLE_RATE=44100` in your `.env.miner` file.
-
-Alternatively, you can set the `HF_TOKEN` environment variable in your `.env.miner` file instead of using `huggingface-cli login`:
-
-```bash
-HF_TOKEN=hf_your_token_here
-```
-
 ### Vocals and Lyrics
 
 The miner automatically handles vocal requests regardless of which backend is used:
@@ -216,7 +177,6 @@ TuneForge is designed to be model-agnostic. If you have a custom music generatio
 
 See the existing backends for reference:
 - `tuneforge/generation/musicgen_backend.py`
-- `tuneforge/generation/stable_audio_backend.py`
 - `tuneforge/generation/diffrhythm_backend.py`
 - `tuneforge/generation/heartmula_backend.py`
 - `tuneforge/generation/lyrics_generator.py` (lyrics generation + prompt analysis)
@@ -237,7 +197,6 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `HF_TOKEN` | str | None | HuggingFace access token (required for gated models like Stable Audio) |
 | `TF_NETUID` | int | `0` | Subnet UID (234 on testnet) |
 | `TF_SUBTENSOR_NETWORK` | str | None | Network: `finney`, `test`, or `local` |
 | `TF_SUBTENSOR_CHAIN_ENDPOINT` | str | None | Custom chain endpoint URL |
@@ -250,7 +209,7 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 | `TF_AXON_PORT` | int | None | Axon serving port |
 | `TF_AXON_EXTERNAL_PORT` | int | None | Public-facing port for Docker/NAT setups |
 | `TF_AXON_EXTERNAL_IP` | str | None | Public IP for Docker/NAT setups |
-| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Model to use for generation (see [Model Selection](#model-selection-guide)) |
+| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Model to use for generation: `facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b` (see [Model Selection](#model-selection-guide)) |
 | `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum audio duration in seconds |
 | `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Generation timeout in seconds |
@@ -320,11 +279,9 @@ The provided models are baselines to get you started. The real opportunity on Tu
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
 | **MusicGen Large** | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer (3.3B params) |
-| **Stable Audio Open 1.0** | `stable_audio` | ~6 GB | Moderate | 44.1 kHz stereo | **Alternative baseline.** Diffusion-based, high-fidelity stereo. Gated model -- requires HuggingFace login |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
-| DiffRhythm v1.2 (base) | `diffrhythm` | ~6-8 GB | Very fast | 44.1 kHz stereo | 18x faster, vocals+lyrics, up to 95s. Requires repo clone |
-| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s. Requires repo clone |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s, vocals+lyrics. Requires repo clone |
 | HeartMuLa 3B | `heartmula` | ~8-10 GB | Moderate | 48 kHz | **Recommended for vocals.** Best prompt adherence + lyrics. Requires heartlib |
 | HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | Moderate | 48 kHz | Higher quality version. Requires heartlib + more VRAM |
 
@@ -346,14 +303,6 @@ Set the model in your `.env.miner` file:
 # MusicGen Large (default baseline, ~16GB VRAM)
 TF_MODEL_NAME=facebook/musicgen-large
 TF_GENERATION_SAMPLE_RATE=32000
-
-# Or Stable Audio Open 1.0 (alternative baseline, ~6GB VRAM)
-TF_MODEL_NAME=stable_audio
-TF_GENERATION_SAMPLE_RATE=44100
-
-# Or DiffRhythm v1.2 base (up to 95s, ~6-8GB VRAM, 18x faster)
-TF_MODEL_NAME=diffrhythm
-TF_GENERATION_SAMPLE_RATE=44100
 
 # Or DiffRhythm v1.2 full (up to 4m45s, ~8-10GB VRAM)
 TF_MODEL_NAME=diffrhythm-full
@@ -539,7 +488,7 @@ The miner exposes health information via `HealthReportSynapse`, which includes G
 
 ### CUDA Out of Memory
 
-MusicGen Large requires ~16 GB VRAM. If you run out of memory, try DiffRhythm (~6-8GB), Stable Audio Open (~6GB), or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
+MusicGen Large requires ~16 GB VRAM. If you run out of memory, try DiffRhythm (~8-10GB) or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small
@@ -569,16 +518,6 @@ MusicGen models are downloaded automatically from HuggingFace on first startup. 
 
 ```bash
 bash scripts/download_models.sh
-```
-
-For **Stable Audio** (gated model), a 401 error means authentication is missing. Ensure you have:
-1. Accepted the license at https://huggingface.co/stabilityai/stable-audio-open-1.0
-2. Set `HF_TOKEN` in your `.env.miner` file, or logged in via `huggingface-cli login`
-
-You can pre-download the model before starting the miner to avoid PM2 restart issues during large downloads:
-
-```bash
-HF_TOKEN=hf_your_token python3 -c "from huggingface_hub import snapshot_download; snapshot_download('stabilityai/stable-audio-open-1.0')"
 ```
 
 For DiffRhythm, verify the repo is cloned at `~/DiffRhythm`, `espeak-ng` is installed, and pre-download weights:

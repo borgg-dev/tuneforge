@@ -16,11 +16,11 @@ from loguru import logger
 class ModelManager:
     """Manages music generation model backends with lazy loading.
 
-    Supports switching between MusicGen and Stable Audio backends
+    Supports switching between music generation backends
     at runtime. Only one backend is loaded at a time to conserve GPU memory.
     """
 
-    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "stable_audio", "diffrhythm", "heartmula")
+    SUPPORTED_BACKENDS: tuple[str, ...] = ("musicgen", "diffrhythm", "heartmula")
 
     def __init__(
         self,
@@ -31,7 +31,7 @@ class ModelManager:
         """Initialize the model manager.
 
         Args:
-            default_backend: Backend to use by default ("musicgen" or "stable_audio").
+            default_backend: Backend to use by default.
             model_size: Model size for MusicGen ("small", "medium", "large").
             device: Torch device string.
         """
@@ -100,7 +100,7 @@ class ModelManager:
             name: Backend name.
 
         Returns:
-            Backend instance (MusicGenBackend or StableAudioBackend).
+            Backend instance.
         """
         if name in self._backends:
             return self._backends[name]
@@ -112,10 +112,6 @@ class ModelManager:
                 model_size=self._model_size,
                 device=self._device,
             )
-        elif name == "stable_audio":
-            from tuneforge.generation.stable_audio_backend import StableAudioBackend
-
-            backend = StableAudioBackend(device=self._device)
         elif name == "diffrhythm":
             from tuneforge.generation.diffrhythm_backend import DiffRhythmBackend
 
@@ -141,7 +137,7 @@ class ModelManager:
         loading the new one.
 
         Args:
-            name: Backend name ("musicgen" or "stable_audio").
+            name: Backend name.
         """
         if name not in self.SUPPORTED_BACKENDS:
             raise ValueError(
