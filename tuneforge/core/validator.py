@@ -666,7 +666,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
 
     # Shorter dendrite timeout for organic — don't let slow miners hold
     # up the customer.  Good miners respond in 5-15s.
-    ORGANIC_TIMEOUT: float = 120.0
+    ORGANIC_TIMEOUT: float = 180.0
 
     # Quick ping before organic generation to filter out dead miners.
     ORGANIC_PING_TIMEOUT: float = 5.0
