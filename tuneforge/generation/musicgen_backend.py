@@ -123,7 +123,7 @@ class MusicGenBackend:
                 torch.cuda.manual_seed(seed)
 
         # MusicGen generates ~50 tokens per second of audio
-        max_new_tokens = min(int(duration_seconds * 50), 1500)
+        max_new_tokens = int(duration_seconds * 50)
 
         logger.info(
             f"Generating: prompt='{prompt[:80]}...', "
