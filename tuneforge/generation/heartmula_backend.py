@@ -257,10 +257,10 @@ class HeartMuLaBackend:
         """
         self.load()
 
-        # Request 1.5x the duration — HeartMuLa is autoregressive and often
-        # stops early on short requests. Generating more and trimming avoids
-        # both duration penalties (too short) and artifact penalties (from looping).
-        overshoot_seconds = min(duration_seconds * 1.5, 240.0)
+        # Request 1.2x the duration — HeartMuLa is autoregressive and can
+        # stop early on short requests. Small overshoot + trim avoids
+        # duration penalties without significantly increasing generation time.
+        overshoot_seconds = min(duration_seconds * 1.2, 240.0)
         max_duration_ms = int(overshoot_seconds * 1000)
 
         if seed is not None:
