@@ -834,7 +834,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
             audio_bytes = resp.deserialize()
             if audio_bytes is None:
                 continue
-            ema = float(self.settings.ema_scores.get(str(uid), 0.5))
+            ema = float(self._leaderboard.get_ema(uid))
             results.append({
                 "miner_uid": uid,
                 "miner_hotkey": hotkey,
