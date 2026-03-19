@@ -954,6 +954,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
                         "tempo_bpm": organic_meta.get("tempo_bpm", 120),
                         "duration_seconds": organic_meta.get("duration_seconds", 30),
                         "validator_hotkey": validator_hotkey,
+                        "is_organic": True,
                         "responses": [
                             {
                                 "miner_uid": uid,
