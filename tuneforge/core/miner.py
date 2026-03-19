@@ -89,7 +89,7 @@ class TuneForgeMiner(BaseMinerNeuron):
         # Preload lyrics generator only if backend supports vocals
         if self._model_manager.supports_vocals:
             from tuneforge.generation.lyrics_generator import LyricsGenerator
-            self._lyrics_gen = LyricsGenerator(device=self.settings.gpu_device)
+            self._lyrics_gen = LyricsGenerator(device="cpu")  # GPT-2 runs fine on CPU, saves GPU VRAM
             logger.info("Preloading lyrics generator (backend supports vocals)...")
             self._lyrics_gen.load()
         else:
