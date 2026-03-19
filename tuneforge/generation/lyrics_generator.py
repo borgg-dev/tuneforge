@@ -102,6 +102,44 @@ class LyricsGenerator:
         self._tokenizer: Any = None
         self._loaded = False
 
+    def detect_vocal_intent(self, prompt: str) -> bool:
+        """Use GPT-2 to determine if the prompt implies vocals.
+
+        Feeds the prompt into GPT-2 with a classification framing and
+        checks if the model's continuation leans toward vocals or instrumental.
+        """
+        self.load()
+        if not self._loaded:
+            return False
+
+        try:
+            classification_prompt = (
+                f'Music prompt: "{prompt}"\n'
+                f"Does this music request include vocals or singing? Answer yes or no:"
+            )
+
+            inputs = self._tokenizer.encode(classification_prompt, return_tensors="pt").to(self.device)
+
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    inputs,
+                    max_new_tokens=5,
+                    temperature=0.1,
+                    do_sample=False,
+                    pad_token_id=self._tokenizer.eos_token_id,
+                )
+
+            response = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
+            answer = response[len(classification_prompt):].strip().lower()
+
+            wants_vocals = answer.startswith("yes")
+            logger.debug(f"Vocal intent detection: '{answer}' → {wants_vocals}")
+            return wants_vocals
+
+        except Exception as exc:
+            logger.warning(f"Vocal intent detection failed: {exc}")
+            return False
+
     def load(self) -> None:
         """Load GPT-2 small model."""
         if self._loaded:

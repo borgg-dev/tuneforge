@@ -238,12 +238,20 @@ class TuneForgeMiner(BaseMinerNeuron):
 
         # Handle lyrics/vocals — only for backends that support them
         lyrics = None
-        if self._model_manager.supports_vocals:
+        vocals_requested = synapse.vocals_requested
+        if self._model_manager.supports_vocals and self._lyrics_gen:
             from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
+
+            # If vocals not explicitly requested, use GPT-2 to analyze the prompt
+            if not vocals_requested:
+                vocals_requested = self._lyrics_gen.detect_vocal_intent(prompt)
+                if vocals_requested:
+                    logger.info("GPT-2 detected vocal intent from prompt")
+
             lyrics = synapse.lyrics
-            if not lyrics and synapse.vocals_requested and self._lyrics_gen:
-                # User wants vocals but didn't provide lyrics — generate from prompt
-                logger.info("Generating lyrics from prompt (vocals requested, no lyrics)")
+            if not lyrics and vocals_requested:
+                # Vocals requested (explicitly or detected) but no lyrics — generate
+                logger.info("Generating lyrics from prompt")
                 genre = extract_genre(prompt) or synapse.genre
                 mood = extract_mood(prompt) or synapse.mood
                 lyrics = self._lyrics_gen.generate(

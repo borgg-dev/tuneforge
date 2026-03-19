@@ -300,6 +300,7 @@ class TuneForgeValidator(BaseValidatorNeuron):
             instruments=challenge.get("instruments"),
             seed=challenge.get("seed"),
             challenge_id=challenge["challenge_id"],
+            vocals_requested=challenge.get("vocals_requested", False),
         )
 
         # 3. Select miner UIDs

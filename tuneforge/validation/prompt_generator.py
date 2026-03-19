@@ -263,6 +263,9 @@ class PromptGenerator:
         challenge_id = uuid.uuid4().hex[:16]
         seed = self._rng.randint(0, 2**31 - 1)
 
+        # ~20% of challenges request vocals
+        vocals_requested = self._rng.random() < 0.20
+
         constraint = self._generate_creative_constraint()
         prompt = self._build_natural_prompt(genre, mood, tempo, instruments, constraint)
 
@@ -277,11 +280,12 @@ class PromptGenerator:
             "instruments": instruments,
             "challenge_id": challenge_id,
             "seed": seed,
+            "vocals_requested": vocals_requested,
         }
 
         logger.debug(
             f"Challenge: genre={genre}, mood={mood}, tempo={tempo}, "
-            f"duration={duration}s, id={challenge_id}"
+            f"duration={duration}s, vocals={vocals_requested}, id={challenge_id}"
         )
         return challenge
 

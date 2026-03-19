@@ -125,10 +125,11 @@ class HeartMuLaBackend:
         return self._loaded
 
     @staticmethod
-    def _build_tags(prompt: str, genre: str | None = None, mood: str | None = None) -> str:
+    def _build_tags(prompt: str, genre: str | None = None, mood: str | None = None, has_vocals: bool = False) -> str:
         """Build HeartMuLa tags from prompt, genre, and mood.
 
         HeartMuLa uses comma-separated tags like: 'reggae,chill,guitar,vocal'
+        Only adds vocal-related tags when has_vocals is True.
         """
         tags = []
 
@@ -173,15 +174,16 @@ class HeartMuLaBackend:
             if i in prompt_lower and i not in tags:
                 tags.append(i)
 
-        # If vocals are part of the prompt, add vocal tag
-        vocal_keywords = ["vocal", "vocals", "singing", "singer", "voice"]
-        if any(kw in prompt_lower for kw in vocal_keywords):
+        # Only add vocal tag when explicitly requested — prevents unwanted vocals
+        if has_vocals:
             if "vocal" not in tags:
                 tags.append("vocal")
+        else:
+            # Explicitly add instrumental tag to suppress vocals
+            tags.append("instrumental")
 
         # Fallback: use the prompt itself as tags if nothing was extracted
         if not tags:
-            # Take first few meaningful words
             words = [w for w in prompt.split()[:5] if len(w) > 2]
             tags = words[:3] if words else ["music"]
 
@@ -263,18 +265,14 @@ class HeartMuLaBackend:
             if torch.cuda.is_available():
                 torch.cuda.manual_seed(seed)
 
-        # Build tags from prompt
-        genre = kwargs.get("genre")
-        mood = kwargs.get("mood")
-        tags = self._build_tags(prompt, genre, mood)
-
         # Format lyrics
         formatted_lyrics = self._format_lyrics(lyrics)
         has_vocals = bool(formatted_lyrics)
 
-        # Add vocal tag if lyrics provided
-        if has_vocals and "vocal" not in tags:
-            tags += ",vocal"
+        # Build tags from prompt — only include vocal tag when vocals actually requested
+        genre = kwargs.get("genre")
+        mood = kwargs.get("mood")
+        tags = self._build_tags(prompt, genre, mood, has_vocals=has_vocals)
 
         logger.info(
             f"Generating: tags='{tags}', "
