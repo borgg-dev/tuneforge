@@ -9,6 +9,7 @@ Extends BaseNeuron with miner-specific functionality:
 """
 
 import time
+import urllib.request
 from abc import abstractmethod
 from typing import Tuple
 
@@ -230,6 +231,62 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
         ...
 
     # ------------------------------------------------------------------
+    # External IP monitoring
+    # ------------------------------------------------------------------
+
+    _IP_CHECK_SERVICES = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ]
+    _IP_CHECK_INTERVAL = 300  # seconds between IP checks
+    _last_known_ip: str | None = None
+    _last_ip_check: float = 0.0
+
+    def _get_external_ip(self, timeout: int = 5) -> str | None:
+        """Query external IP from public services. Returns None on failure."""
+        for url in self._IP_CHECK_SERVICES:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    ip = resp.read().decode().strip()
+                    if ip and 4 <= len(ip) <= 45:  # basic sanity
+                        return ip
+            except Exception:
+                continue
+        return None
+
+    def _check_ip_and_reregister(self) -> None:
+        """Re-register axon on-chain if external IP has changed."""
+        now = time.time()
+        if now - self._last_ip_check < self._IP_CHECK_INTERVAL:
+            return
+        self._last_ip_check = now
+
+        current_ip = self._get_external_ip()
+        if current_ip is None:
+            logger.warning("Could not determine external IP — skipping IP check")
+            return
+
+        if self._last_known_ip is None:
+            # First check — just record it
+            self._last_known_ip = current_ip
+            return
+
+        if current_ip != self._last_known_ip:
+            old_ip = self._last_known_ip
+            self._last_known_ip = current_ip
+            logger.warning(
+                f"External IP changed: {old_ip} → {current_ip} — re-registering axon"
+            )
+            self.axon.external_ip = current_ip
+            try:
+                self._serve_axon_with_retry()
+                logger.info(f"Axon re-registered with new IP {current_ip}")
+            except Exception as exc:
+                logger.error(f"Failed to re-register axon after IP change: {exc}")
+
+    # ------------------------------------------------------------------
     # Run loop
     # ------------------------------------------------------------------
 
@@ -252,6 +309,12 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
         # Register axon on-chain with exponential backoff for rate limits
         self._serve_axon_with_retry()
 
+        # Record initial external IP
+        self._last_known_ip = self._get_external_ip()
+        if self._last_known_ip:
+            logger.info(f"Initial external IP: {self._last_known_ip}")
+        self._last_ip_check = time.time()
+
         self.is_running = True
         self._start_time = time.time()
 
@@ -260,6 +323,8 @@ class BaseMinerNeuron(BaseModel, BaseNeuron):
                 try:
                     if self.should_sync_metagraph():
                         self.sync()
+
+                    self._check_ip_and_reregister()
 
                     self.log_status()
                     self.step += 1
