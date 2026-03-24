@@ -325,14 +325,27 @@ class TuneForgeValidator(BaseValidatorNeuron):
         for uid in miner_uids[:5]:
             ax = self.metagraph.axons[uid]
             logger.debug(f"  UID {uid} axon: hotkey={ax.hotkey[:16]}... serving={ax.is_serving}")
+        # Hard deadline: generation_timeout + 30s buffer for network overhead.
+        # Prevents indefinite hangs if aiohttp/DNS/TCP stalls beyond the
+        # per-axon timeout (known aiohttp issue with unreachable hosts).
+        hard_deadline = self.settings.generation_timeout + 30
         try:
-            responses: list[MusicGenerationSynapse] = await self.dendrite.forward(
-                axons=axons,
-                synapse=synapse,
-                timeout=self.settings.generation_timeout,
-                deserialize=False,
+            responses: list[MusicGenerationSynapse] = await asyncio.wait_for(
+                self.dendrite.forward(
+                    axons=axons,
+                    synapse=synapse,
+                    timeout=self.settings.generation_timeout,
+                    deserialize=False,
+                ),
+                timeout=hard_deadline,
             )
             logger.debug(f"Dendrite returned {len(responses)} responses")
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Dendrite forward hard-deadline exceeded ({hard_deadline}s) "
+                f"— treating all {len(miner_uids)} miners as non-responsive"
+            )
+            responses = []
         except Exception as exc:
             logger.error(f"Dendrite forward failed: {exc}")
             responses = []
