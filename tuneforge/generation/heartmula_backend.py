@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 import numpy as np
+import soundfile as sf
 import torch
 import torchaudio
 from loguru import logger
@@ -81,6 +82,21 @@ class HeartMuLaBackend:
                 version=self._version,
                 lazy_load=False,
             )
+
+            # Monkey-patch postprocess to use soundfile instead of
+            # torchaudio.save — avoids torchcodec/libnvrtc dependency.
+            _original_postprocess = self._pipe.postprocess
+
+            def _sf_postprocess(model_outputs, save_path):
+                frames = model_outputs["frames"].to(self._pipe.codec_device)
+                wav = self._pipe.codec.detokenize(frames)
+                self._pipe._unload()
+                wav_np = wav.to(torch.float32).cpu().numpy()
+                if wav_np.ndim == 2:
+                    wav_np = wav_np.T  # soundfile expects (samples, channels)
+                sf.write(save_path, wav_np, 48000)
+
+            self._pipe.postprocess = _sf_postprocess
 
             self._loaded = True
             elapsed = time.time() - t0
