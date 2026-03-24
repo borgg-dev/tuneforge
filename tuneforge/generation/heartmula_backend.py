@@ -125,21 +125,45 @@ class HeartMuLaBackend:
         return self._loaded
 
     @staticmethod
-    def _build_tags(prompt: str, genre: str | None = None, mood: str | None = None, has_vocals: bool = False) -> str:
-        """Build HeartMuLa tags from prompt, genre, and mood.
+    def _build_tags(
+        prompt: str,
+        genre: str | None = None,
+        mood: str | None = None,
+        has_vocals: bool = False,
+        tempo_bpm: int = 0,
+        key_signature: str | None = None,
+        instruments: list[str] | None = None,
+    ) -> str:
+        """Build HeartMuLa tags from prompt and structured parameters.
 
-        HeartMuLa uses comma-separated tags like: 'reggae,chill,guitar,vocal'
-        Only adds vocal-related tags when has_vocals is True.
+        HeartMuLa uses comma-separated tags like:
+        'reggae,chill,guitar,vocal,110 bpm,D major'
+
+        Structured parameters (genre, mood, tempo, key, instruments) are
+        forwarded directly as tags so the model receives the full intent.
+        Additional keywords are extracted from the prompt to catch anything
+        the structured fields missed.
         """
-        tags = []
+        tags: list[str] = []
 
-        # Add explicit genre/mood if provided
+        # Add explicit structured parameters first (highest fidelity)
         if genre:
             tags.append(genre.lower())
         if mood:
             tags.append(mood.lower())
+        if tempo_bpm and tempo_bpm > 0:
+            tags.append(f"{tempo_bpm} bpm")
+        if key_signature:
+            tags.append(key_signature.lower())
 
-        # Extract additional tags from the prompt
+        # Add explicit instrument list from structured params
+        if instruments:
+            for inst in instruments:
+                inst_lower = inst.strip().lower()
+                if inst_lower and inst_lower not in tags:
+                    tags.append(inst_lower)
+
+        # Extract additional keywords from the prompt that aren't already covered
         prompt_lower = prompt.lower()
 
         # Genre keywords
@@ -165,12 +189,13 @@ class HeartMuLaBackend:
             if m in prompt_lower and m not in tags:
                 tags.append(m)
 
-        # Instrument keywords
-        instruments = [
+        # Instrument keywords (supplement structured list)
+        instrument_keywords = [
             "piano", "guitar", "drums", "bass", "synth", "strings", "brass",
             "flute", "violin", "saxophone", "organ", "trumpet", "harmonica",
+            "cello", "harp", "percussion", "808", "hi-hat", "choir",
         ]
-        for i in instruments:
+        for i in instrument_keywords:
             if i in prompt_lower and i not in tags:
                 tags.append(i)
 
@@ -179,7 +204,6 @@ class HeartMuLaBackend:
             if "vocal" not in tags:
                 tags.append("vocal")
         else:
-            # Explicitly add instrumental tag to suppress vocals
             tags.append("instrumental")
 
         # Fallback: use the prompt itself as tags if nothing was extracted
@@ -272,10 +296,22 @@ class HeartMuLaBackend:
         formatted_lyrics = self._format_lyrics(lyrics)
         has_vocals = bool(formatted_lyrics)
 
-        # Build tags from prompt — only include vocal tag when vocals actually requested
+        # Build tags from prompt + structured params — pass everything through
+        # so the model gets full context (genre, mood, tempo, key, instruments)
         genre = kwargs.get("genre")
         mood = kwargs.get("mood")
-        tags = self._build_tags(prompt, genre, mood, has_vocals=has_vocals)
+        tempo_bpm = kwargs.get("tempo_bpm", 0)
+        key_signature = kwargs.get("key_signature")
+        structured_instruments = kwargs.get("instruments")
+        tags = self._build_tags(
+            prompt,
+            genre,
+            mood,
+            has_vocals=has_vocals,
+            tempo_bpm=tempo_bpm,
+            key_signature=key_signature,
+            instruments=structured_instruments,
+        )
 
         logger.info(
             f"Generating: tags='{tags}', "

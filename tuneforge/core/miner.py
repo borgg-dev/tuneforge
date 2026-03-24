@@ -271,6 +271,13 @@ class TuneForgeMiner(BaseMinerNeuron):
             top_k=self.settings.top_k,
             top_p=self.settings.top_p,
             lyrics=lyrics,
+            # Forward structured params so backends (HeartMuLa, DiffRhythm)
+            # can use them directly instead of lossy keyword extraction.
+            genre=synapse.genre,
+            mood=synapse.mood,
+            tempo_bpm=synapse.tempo_bpm,
+            key_signature=synapse.key_signature,
+            instruments=synapse.instruments,
         )
 
         audio = self._audio_utils.normalize(audio)

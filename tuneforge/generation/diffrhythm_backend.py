@@ -132,66 +132,72 @@ class DiffRhythmBackend:
         return self._loaded
 
     @staticmethod
-    def _build_style_prompt(prompt: str) -> str:
-        """Extract a concise style description from a verbose prompt.
+    def _build_style_prompt(
+        prompt: str,
+        genre: str | None = None,
+        mood: str | None = None,
+        tempo_bpm: int = 0,
+        key_signature: str | None = None,
+        instruments: list[str] | None = None,
+    ) -> str:
+        """Build a style description from prompt and structured parameters.
 
-        DiffRhythm's MuQ-MuLan style encoder works best with short,
-        descriptive style phrases, not long structured prompts.
+        MuQ-MuLan is a CLAP-family encoder that understands natural language
+        music descriptions. Rather than truncating, we build a dense but
+        readable style string that carries all the structured information
+        the user provided, keeping it under ~250 chars for efficiency.
         """
-        # If the prompt is already short, use as-is
-        if len(prompt) <= 120:
-            return prompt
+        parts: list[str] = []
 
-        # Extract the most important style keywords from a verbose prompt
-        # Focus on genre, mood, instruments, and style descriptors
-        parts = []
-        prompt_lower = prompt.lower()
+        # Start with genre + mood core (highest signal for style)
+        if mood and genre:
+            parts.append(f"{mood} {genre}")
+        elif genre:
+            parts.append(genre)
+        elif mood:
+            parts.append(f"{mood} music")
 
-        # Extract genre if present
-        genres = [
-            "reggae", "rock", "pop", "jazz", "blues", "hip-hop", "rap",
-            "electronic", "edm", "house", "techno", "ambient", "classical",
-            "folk", "country", "r&b", "soul", "funk", "metal", "punk",
-            "lo-fi", "lofi", "cinematic", "orchestral", "latin", "bossa nova",
-            "psychedelic", "indie", "alternative", "gospel", "ska",
-        ]
-        for g in genres:
-            if g in prompt_lower:
-                parts.append(g)
-                break
+        # Tempo — important for rhythm-focused model
+        if tempo_bpm and tempo_bpm > 0:
+            parts.append(f"{tempo_bpm} BPM")
 
-        # Extract mood
-        moods = [
-            "energetic", "chill", "dark", "uplifting", "melancholic", "dreamy",
-            "aggressive", "peaceful", "romantic", "epic", "happy", "sad",
-            "groovy", "mellow", "intense", "hopeful", "nostalgic",
-        ]
-        for m in moods:
-            if m in prompt_lower:
-                parts.append(m)
-                break
+        # Key signature
+        if key_signature:
+            parts.append(f"in {key_signature}")
 
-        # Extract key instruments
-        instruments = [
-            "piano", "guitar", "drums", "bass", "synth", "strings", "brass",
-            "vocals", "vocal", "flute", "violin", "saxophone", "organ",
-            "trumpet", "harmonica", "sitar", "tabla",
-        ]
-        found_instruments = [i for i in instruments if i in prompt_lower]
-        if found_instruments:
-            parts.extend(found_instruments[:3])
+        # Instruments from structured params
+        if instruments:
+            inst_str = ", ".join(i.strip() for i in instruments[:5])
+            parts.append(f"with {inst_str}")
 
-        # If we extracted meaningful parts, build a concise style prompt
-        if parts:
-            style = ", ".join(parts)
-            # Add the original short text if it has additional context
-            first_sentence = prompt.split(".")[0].split(",")[0].strip()
-            if len(first_sentence) < 80 and first_sentence.lower() not in style.lower():
-                return f"{first_sentence}, {style}"
-            return style
+        structured = ", ".join(parts)
 
-        # Fallback: truncate to first meaningful chunk
-        return prompt[:120]
+        # If we have structured info, combine with user's text prompt
+        if structured:
+            # Use the user's free text (first sentence) + all structured info
+            user_text = prompt.split(".")[0].split(",")[0].strip()
+            if user_text and user_text.lower() not in structured.lower():
+                combined = f"{user_text}, {structured}"
+            else:
+                combined = structured
+            # Also extract any keywords from prompt not already covered
+            prompt_lower = prompt.lower()
+            extra = []
+            keywords = [
+                "dreamy", "ethereal", "groovy", "atmospheric", "cinematic",
+                "lo-fi", "lofi", "warm", "bright", "dark", "punchy",
+                "smooth", "gritty", "distorted", "acoustic", "electric",
+            ]
+            for kw in keywords:
+                if kw in prompt_lower and kw not in combined.lower():
+                    extra.append(kw)
+            if extra:
+                combined = f"{combined}, {', '.join(extra[:3])}"
+            return combined[:300]
+
+        # No structured params — pass the prompt through directly
+        # (don't truncate to 120 chars — MuQ-MuLan handles longer text)
+        return prompt[:300]
 
     @staticmethod
     def _ensure_lrc_format(lyrics: str, duration_seconds: float) -> str:
@@ -279,8 +285,20 @@ class DiffRhythmBackend:
         else:
             lyrics = "[Instrumental]"
 
-        # Build concise style prompt for MuQ-MuLan, incorporating detected genre/mood
-        style_prompt_text = self._build_style_prompt(prompt)
+        # Build style prompt for MuQ-MuLan with full structured context
+        genre = kwargs.get("genre")
+        mood = kwargs.get("mood")
+        tempo_bpm = kwargs.get("tempo_bpm", 0)
+        key_sig = kwargs.get("key_signature")
+        structured_instruments = kwargs.get("instruments")
+        style_prompt_text = self._build_style_prompt(
+            prompt,
+            genre=genre,
+            mood=mood,
+            tempo_bpm=tempo_bpm,
+            key_signature=key_sig,
+            instruments=structured_instruments,
+        )
 
         logger.info(
             f"Generating: style='{style_prompt_text[:80]}', "

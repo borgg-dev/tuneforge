@@ -171,7 +171,9 @@ class MusicGenBackend:
         """Generate a single chunk of audio (max 30s).
 
         Args:
-            audio_prompt: Optional audio tensor to condition on (for continuation).
+            audio_prompt: Optional raw audio tensor [1, samples] to condition on.
+                          Passed as ``input_values`` so MusicGen's audio encoder
+                          encodes it and the decoder continues from that context.
         """
         max_new_tokens = min(int(duration_seconds * 50), self.MAX_TOKENS_PER_CHUNK)
 
@@ -192,9 +194,10 @@ class MusicGenBackend:
                 "top_p": top_p if top_p > 0 else None,
             }
 
-            # If we have an audio prompt (continuation), pass it
+            # If we have an audio prompt (continuation), pass the raw waveform
+            # via input_values so MusicGen encodes it and continues from it.
             if audio_prompt is not None:
-                generate_kwargs["audio_codes"] = audio_prompt
+                generate_kwargs["input_values"] = audio_prompt
 
             with torch.no_grad():
                 audio_values = self._model.generate(**generate_kwargs)
@@ -220,13 +223,15 @@ class MusicGenBackend:
     ) -> np.ndarray:
         """Generate long audio by stitching 30s chunks with overlap.
 
-        Each chunk uses the last OVERLAP_SECONDS of the previous chunk
-        as context for seamless continuation.
+        Each chunk after the first uses the tail of the previous chunk as
+        an audio prompt (via input_values) so MusicGen continues the same
+        musical idea rather than generating independent segments.
         """
         remaining = duration_seconds
         all_chunks: list[np.ndarray] = []
         overlap_samples = int(self.OVERLAP_SECONDS * self.SAMPLE_RATE)
         chunk_num = 0
+        prev_audio_tail: torch.Tensor | None = None
 
         logger.info(
             f"Chunked generation: {duration_seconds}s total, "
@@ -240,8 +245,18 @@ class MusicGenBackend:
             logger.info(f"  Chunk {chunk_num}: generating {chunk_dur:.1f}s ({remaining:.1f}s remaining)")
 
             chunk = self._generate_chunk(
-                prompt, chunk_dur, guidance_scale, temperature, top_k, top_p
+                prompt, chunk_dur, guidance_scale, temperature, top_k, top_p,
+                audio_prompt=prev_audio_tail,
             )
+
+            # Keep the tail of this chunk as audio context for the next one
+            tail_samples = int(self.OVERLAP_SECONDS * self.SAMPLE_RATE)
+            if len(chunk) >= tail_samples:
+                prev_audio_tail = torch.tensor(
+                    chunk[-tail_samples:], dtype=torch.float32,
+                ).unsqueeze(0).to(self.device)
+            else:
+                prev_audio_tail = None
 
             if all_chunks:
                 # Crossfade: blend the overlap region
