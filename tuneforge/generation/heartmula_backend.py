@@ -15,7 +15,6 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 import torch
-import torchaudio
 from loguru import logger
 
 
@@ -355,8 +354,8 @@ class HeartMuLaBackend:
                     cfg_scale=guidance_scale,
                 )
 
-            # Load the generated audio
-            audio, sr = torchaudio.load(tmp_path)
+            # Load the generated audio using soundfile (avoids torchcodec)
+            audio_np, sr = sf.read(tmp_path, dtype="float32")
 
             # Clean up temp file
             try:
@@ -364,12 +363,11 @@ class HeartMuLaBackend:
             except Exception:
                 pass
 
-            # Convert to numpy, mono
-            audio_np = audio.numpy()
-            if audio_np.ndim == 2 and audio_np.shape[0] >= 2:
-                audio_np = audio_np.mean(axis=0)
+            # Convert to mono — soundfile returns (samples, channels)
+            if audio_np.ndim == 2 and audio_np.shape[1] >= 2:
+                audio_np = audio_np.mean(axis=1)
             elif audio_np.ndim == 2:
-                audio_np = audio_np[0]
+                audio_np = audio_np[:, 0]
 
             audio_np = audio_np.astype(np.float32)
 
