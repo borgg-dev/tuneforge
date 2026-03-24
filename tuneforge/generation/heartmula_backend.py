@@ -77,7 +77,7 @@ class HeartMuLaBackend:
                 },
                 dtype={
                     "mula": torch.bfloat16,
-                    "codec": torch.float32,
+                    "codec": torch.float16,
                 },
                 version=self._version,
                 lazy_load=False,
