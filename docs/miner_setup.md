@@ -2,7 +2,7 @@
 
 This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns α (alpha) rewards based on quality scores.
 
-**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** MusicGen Large is provided as a baseline starting model, but miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
+**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** ACE-Step 1.5 is the recommended default backend -- it produces 48kHz stereo audio with vocals and lyrics support, requires under 4GB VRAM (turbo variant), and is MIT licensed. MusicGen Large, DiffRhythm, and HeartMuLa remain available as alternatives. Miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
 
 ---
 
@@ -11,7 +11,7 @@ This guide covers everything you need to run a miner on the TuneForge subnet. A 
 A TuneForge miner performs the following:
 
 - Receives `MusicGenerationSynapse` challenges from validators via the Bittensor axon.
-- Generates audio using a configurable backend (MusicGen Large, DiffRhythm, HeartMuLa, or your own custom model).
+- Generates audio using a configurable backend (ACE-Step 1.5, MusicGen Large, DiffRhythm, HeartMuLa, or your own custom model).
 - Returns base64-encoded WAV audio along with metadata (`sample_rate`, `generation_time_ms`, `model_id`).
 - Earns α (alpha) rewards proportional to quality scores assigned by validators.
 - Handles organic requests from the SaaS API. Organic requests do not affect scoring.
@@ -24,7 +24,8 @@ A TuneForge miner performs the following:
 
 | Setup | GPU | VRAM | CPU | RAM | Disk | Best For |
 |-------|-----|------|-----|-----|------|----------|
-| **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | Default baseline, highest quality from MusicGen family |
+| **Recommended (ACE-Step 1.5)** | RTX 3060 / T4 or better | 4 GB | 4 cores | 16 GB | 50 GB SSD | Default recommended backend, 48kHz stereo, vocals+lyrics, sub-10s generation |
+| **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | MusicGen family, instrumental only, CC-BY-NC license |
 | **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
 | **Budget (DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
 | **Entry (MusicGen Small)** | RTX 3060 | 6 GB | 4 cores | 16 GB | 30 GB SSD | Testing and development only |
@@ -35,12 +36,13 @@ A TuneForge miner performs the following:
 
 | Model | `TF_MODEL_NAME` | VRAM (fp16) | Speed (30s audio) | Sample Rate | Notes |
 |-------|-----------------|-------------|--------------------| ------------|-------|
-| **MusicGen Large** (default) | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | Best baseline quality, 3.3B params |
-| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s, vocal+lyrics support |
-| HeartMuLa 3B | `heartmula` | ~8-10 GB | ~10-30s on 4090 | 48 kHz | Vocals+lyrics, great prompt adherence, comparable to Suno |
-| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | ~20-60s on 4090 | 48 kHz | Higher quality vocals+lyrics, best prompt adherence |
-| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large |
-| MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only |
+| **ACE-Step 1.5** (recommended) | `ace-step-1.5` | ~4 GB | sub-10s on 4090 | 48 kHz stereo | Recommended default. Vocals+lyrics, 50+ languages, up to 10 min, MIT license |
+| MusicGen Large | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | 3.3B params, instrumental only, no vocals. CC-BY-NC license (non-commercial) |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s, vocal+lyrics support. Fast generation, decent quality |
+| HeartMuLa 3B | `heartmula` | ~8-10 GB | ~10-30s on 4090 | 48 kHz | Vocals+lyrics. Open-source 3B has weak prompt adherence, mainly useful for vocal generation |
+| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | ~20-60s on 4090 | 48 kHz | Higher quality vocals+lyrics, better prompt adherence than 3B |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | ~10-20s on 4090 | 32 kHz mono | Reduced quality vs. Large. CC-BY-NC license |
+| MusicGen Small | `facebook/musicgen-small` | ~4 GB | ~5-10s on 4090 | 32 kHz mono | Lowest quality, for testing only. CC-BY-NC license |
 
 These are baseline models to get you started. The scoring system is model-agnostic -- it evaluates audio quality, prompt adherence, musicality, and many other signals. Miners who develop or integrate superior models will earn higher scores and more α (alpha).
 
@@ -49,7 +51,8 @@ These are baseline models to get you started. The scoring system is model-agnost
 | Component | Size | Notes |
 |-----------|------|-------|
 | Python packages + PyTorch + CUDA | ~8 GB | Installed once |
-| MusicGen Large model weights | ~7 GB | Downloaded on first run to HuggingFace cache |
+| ACE-Step 1.5 repo + checkpoints | ~5 GB | Repo clone + auto-downloaded from HuggingFace on first run |
+| MusicGen Large model weights | ~7 GB | Only if using MusicGen |
 | DiffRhythm model weights | ~4 GB | Only if using DiffRhythm |
 | Lyrics generator (GPT-2) | ~0.5 GB | Loaded automatically for vocal support |
 | OS + system packages | ~4-5 GB | Depends on base image |
@@ -94,7 +97,20 @@ source venv/bin/activate
 pip install -e .
 ```
 
-### DiffRhythm v1.2 Setup (Alternative Baseline)
+### ACE-Step 1.5 Setup (Recommended Default)
+
+ACE-Step 1.5 is the recommended default backend. It produces 48kHz stereo audio with vocals and lyrics support in 50+ languages, generates up to 10 minutes of audio, requires under 4GB VRAM (turbo variant), and runs with sub-10s generation times. Quality is between Suno v4.5 and v5. It is MIT licensed (fully commercial).
+
+```bash
+# Clone the ACE-Step repo
+git clone https://github.com/ace-step/ACE-Step-1.5.git ~/ace-step-repo
+```
+
+Model checkpoints are auto-downloaded from HuggingFace (`ACE-Step/Ace-Step1.5`) on the first run. No manual weight download is required.
+
+Set `TF_MODEL_NAME=ace-step-1.5`, `TF_GENERATION_SAMPLE_RATE=48000`, and `TF_GENERATION_MAX_DURATION=180`.
+
+### DiffRhythm v1.2 Setup (Alternative)
 
 DiffRhythm is a latent diffusion model that generates full-length songs at 44.1kHz stereo. It uses ~8-10GB VRAM and supports vocals with lyrics. The full variant generates songs up to 4m45s.
 
@@ -131,9 +147,9 @@ print('Done!')
 
 The MuQ style encoder (~2 GB) is also downloaded automatically on first run. Set `TF_MODEL_NAME=diffrhythm-full` and `TF_GENERATION_SAMPLE_RATE=44100`.
 
-### HeartMuLa Setup (Recommended for Vocals)
+### HeartMuLa Setup (Alternative -- Vocals)
 
-HeartMuLa is an LLM-based music generation model (Llama 3.2 backbone) with excellent prompt adherence, genre matching, and lyrics/vocal support. It produces 48kHz audio comparable to Suno in quality. Available in 3B (~8-10GB VRAM) and 7B (~16-20GB VRAM) versions.
+HeartMuLa is an LLM-based music generation model (Llama 3.2 backbone) with lyrics/vocal support. It produces 48kHz audio. Available in 3B (~8-10GB VRAM) and 7B (~16-20GB VRAM) versions. Note: the open-source 3B version has weak prompt adherence and is mainly useful for vocal generation.
 
 ```bash
 # Install heartlib
@@ -149,9 +165,9 @@ huggingface-cli download --local-dir ~/heartmula-ckpt/HeartCodec-oss HeartMuLa/H
 
 Set `TF_MODEL_NAME=heartmula` (3B) or `TF_MODEL_NAME=heartmula-7b` (7B), and `TF_GENERATION_SAMPLE_RATE=48000`. To use a custom checkpoint path, set `HEARTMULA_MODEL_PATH=/path/to/ckpt`.
 
-### MusicGen Setup (Default Baseline)
+### MusicGen Setup (Alternative -- Instrumental Only)
 
-MusicGen Large is the default baseline model (~16GB VRAM, 3.3B parameters). For GPUs with less than 16GB VRAM, use `facebook/musicgen-medium` instead. Install audiocraft separately because it pins specific torch versions:
+MusicGen Large is an alternative baseline model (~16GB VRAM, 3.3B parameters). Note: MusicGen is licensed under CC-BY-NC (non-commercial only), supports only 30s max duration, and does not support vocals. For GPUs with less than 16GB VRAM, use `facebook/musicgen-medium` instead. Install audiocraft separately because it pins specific torch versions:
 
 ```bash
 pip install audiocraft --no-deps
@@ -176,6 +192,7 @@ Backends that support vocals (like DiffRhythm) receive the generated lyrics via 
 TuneForge is designed to be model-agnostic. If you have a custom music generation model, you can integrate it by implementing a backend class that follows the same interface as the existing backends in `tuneforge/generation/`. Your model just needs to accept a text prompt and duration, and return an audio array with a sample rate. If your model supports vocals, accept the `lyrics` keyword argument in your `generate()` method.
 
 See the existing backends for reference:
+- `tuneforge/generation/ace_step_backend.py`
 - `tuneforge/generation/musicgen_backend.py`
 - `tuneforge/generation/diffrhythm_backend.py`
 - `tuneforge/generation/heartmula_backend.py`
@@ -209,9 +226,9 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 | `TF_AXON_PORT` | int | None | Axon serving port |
 | `TF_AXON_EXTERNAL_PORT` | int | None | Public-facing port for Docker/NAT setups |
 | `TF_AXON_EXTERNAL_IP` | str | None | Public IP for Docker/NAT setups |
-| `TF_MODEL_NAME` | str | `facebook/musicgen-large` | Model to use for generation: `facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b` (see [Model Selection](#model-selection-guide)) |
-| `TF_GENERATION_MAX_DURATION` | int | `30` | Maximum audio duration in seconds |
-| `TF_GENERATION_SAMPLE_RATE` | int | `32000` | Audio sample rate in Hz |
+| `TF_MODEL_NAME` | str | `ace-step-1.5` | Model to use for generation: `ace-step-1.5`, `facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b` (see [Model Selection](#model-selection-guide)) |
+| `TF_GENERATION_MAX_DURATION` | int | `180` | Maximum audio duration in seconds |
+| `TF_GENERATION_SAMPLE_RATE` | int | `48000` | Audio sample rate in Hz |
 | `TF_GENERATION_TIMEOUT` | int | `120` | Generation timeout in seconds |
 | `TF_GPU_DEVICE` | str | `cuda:0` | GPU device identifier |
 | `TF_MODEL_PRECISION` | str | `float16` | Model precision: `float32`, `float16`, or `bfloat16` |
@@ -225,17 +242,18 @@ All variables use the `TF_` prefix and are loaded via pydantic-settings.
 
 Note: Scoring weights are hardcoded on the validator side and are not configurable via environment variables. This ensures consensus across all validators.
 
-### Minimal Example (MusicGen Large)
+### Minimal Example (ACE-Step 1.5)
 
 ```bash
 TF_NETUID=234
 TF_SUBTENSOR_NETWORK=test
 TF_WALLET_NAME=my_wallet
 TF_WALLET_HOTKEY=my_hotkey
-TF_MODEL_NAME=facebook/musicgen-large
+TF_MODEL_NAME=ace-step-1.5
 TF_GPU_DEVICE=cuda:0
 TF_AXON_PORT=8091
-TF_GENERATION_SAMPLE_RATE=32000
+TF_GENERATION_SAMPLE_RATE=48000
+TF_GENERATION_MAX_DURATION=180
 ```
 
 ---
@@ -278,12 +296,13 @@ The provided models are baselines to get you started. The real opportunity on Tu
 
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
-| **MusicGen Large** | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | **Default baseline.** Autoregressive transformer (3.3B params) |
-| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM |
-| MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs |
-| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s, vocals+lyrics. Requires repo clone |
-| HeartMuLa 3B | `heartmula` | ~8-10 GB | Moderate | 48 kHz | **Recommended for vocals.** Best prompt adherence + lyrics. Requires heartlib |
-| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | Moderate | 48 kHz | Higher quality version. Requires heartlib + more VRAM |
+| **ACE-Step 1.5** | `ace-step-1.5` | ~4 GB | Sub-10s | 48 kHz stereo | **Recommended default.** Vocals+lyrics, 50+ languages, up to 10 min, MIT license. Requires repo clone |
+| MusicGen Large | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | Instrumental only, no vocals, 30s max. CC-BY-NC license (non-commercial) |
+| MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM. CC-BY-NC license |
+| MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs. CC-BY-NC license |
+| DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | Fast | 44.1 kHz stereo | Full-length songs up to 4m45s, vocals+lyrics. Fast generation, decent quality. Requires repo clone |
+| HeartMuLa 3B | `heartmula` | ~8-10 GB | Moderate | 48 kHz | Vocals+lyrics. Open-source 3B has weak prompt adherence, mainly useful for vocal generation. Requires heartlib |
+| HeartMuLa 7B | `heartmula-7b` | ~16-20 GB | Moderate | 48 kHz | Higher quality vocals than 3B. Requires heartlib + more VRAM |
 
 ### Custom Models
 
@@ -300,7 +319,12 @@ Speed accounts for only 2% of the total score. Quality and adherence signals col
 Set the model in your `.env.miner` file:
 
 ```bash
-# MusicGen Large (default baseline, ~16GB VRAM)
+# ACE-Step 1.5 (recommended default, ~4GB VRAM, 48kHz stereo, vocals+lyrics)
+TF_MODEL_NAME=ace-step-1.5
+TF_GENERATION_SAMPLE_RATE=48000
+TF_GENERATION_MAX_DURATION=180
+
+# Or MusicGen Large (instrumental only, ~16GB VRAM, CC-BY-NC license)
 TF_MODEL_NAME=facebook/musicgen-large
 TF_GENERATION_SAMPLE_RATE=32000
 
@@ -308,15 +332,15 @@ TF_GENERATION_SAMPLE_RATE=32000
 TF_MODEL_NAME=diffrhythm-full
 TF_GENERATION_SAMPLE_RATE=44100
 
-# Or HeartMuLa 3B (vocals + great prompt adherence, ~8-10GB VRAM)
+# Or HeartMuLa 3B (vocals, weak prompt adherence, ~8-10GB VRAM)
 TF_MODEL_NAME=heartmula
 TF_GENERATION_SAMPLE_RATE=48000
 
-# Or HeartMuLa 7B (highest quality vocals, ~16-20GB VRAM)
+# Or HeartMuLa 7B (higher quality vocals, ~16-20GB VRAM)
 TF_MODEL_NAME=heartmula-7b
 TF_GENERATION_SAMPLE_RATE=48000
 
-# Or MusicGen Medium (for GPUs with <16GB VRAM)
+# Or MusicGen Medium (for GPUs with <16GB VRAM, CC-BY-NC license)
 TF_MODEL_NAME=facebook/musicgen-medium
 TF_GENERATION_SAMPLE_RATE=32000
 ```
@@ -488,7 +512,7 @@ The miner exposes health information via `HealthReportSynapse`, which includes G
 
 ### CUDA Out of Memory
 
-MusicGen Large requires ~16 GB VRAM. If you run out of memory, try DiffRhythm (~8-10GB) or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
+MusicGen Large requires ~16 GB VRAM. If you run out of memory, try ACE-Step 1.5 (~4GB, recommended), DiffRhythm (~8-10GB), or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small
@@ -564,6 +588,10 @@ Pull the latest code and restart:
 cd tuneforge
 git pull origin main
 pip install -e .
+
+# Also update ACE-Step if using it
+cd ~/ace-step-repo
+git pull origin main
 
 # Also update DiffRhythm if using it
 cd ~/DiffRhythm

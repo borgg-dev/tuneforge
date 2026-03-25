@@ -15,9 +15,11 @@
   <p>TuneForge is a Bittensor subnet where miners compete to generate music from text prompts.<br/>
   Validators issue challenges, score the returned audio across 16 quality signals with penalty<br/>
   multipliers, and set on-chain weights that determine α emissions. The scoring pipeline is<br/>
-  model-agnostic — it evaluates the audio, not the architecture. Miners ship with MusicGen Large,<br/>
-  DiffRhythm v1.2, and HeartMuLa as baselines, but the ones earning real weight will be the ones who bring<br/>
-  better models, fine-tune aggressively, or build something entirely new.</p>
+  model-agnostic — it evaluates the audio, not the architecture. The recommended default backend<br/>
+  is ACE-Step 1.5 (48kHz stereo, vocals+lyrics, under 4GB VRAM, MIT license). MusicGen Large,<br/>
+  DiffRhythm v1.2, and HeartMuLa remain available as alternatives, but the ones earning real<br/>
+  weight will be the ones who bring better models, fine-tune aggressively, or build something<br/>
+  entirely new.</p>
 
   <p><strong>Testnet netuid: 234</strong> · <strong>Mainnet: TBD</strong></p>
 
@@ -44,7 +46,7 @@ The network runs in repeating validation rounds. Each round:
 
 1. **Challenge** -- The validator generates a text-to-music prompt (tempo, key, genre, instruments, duration) from a combinatorial space of 100k+ possible challenges and sends it to a batch of miners via Bittensor dendrite.
 
-2. **Generate** -- Each miner runs its generation backend (MusicGen, DiffRhythm, HeartMuLa, or any custom model), produces audio, and returns it via axon. When vocals are requested without lyrics, the miner auto-generates contextual lyrics from the prompt using a lightweight text model (GPT-2).
+2. **Generate** -- Each miner runs its generation backend (ACE-Step 1.5, MusicGen, DiffRhythm, HeartMuLa, or any custom model), produces audio, and returns it via axon. When vocals are requested without lyrics, the miner auto-generates contextual lyrics from the prompt using a lightweight text model (GPT-2).
 
 3. **Score** -- The validator runs the audio through 16 weighted scorers covering prompt adherence, composition, production quality, naturalness, and more. Penalty multipliers (duration, artifacts, FAD, fingerprint) are applied on top. Multi-scale evaluation adjusts weights based on audio duration, and genre-aware profiles set appropriate quality targets.
 
@@ -214,9 +216,9 @@ All configuration uses environment variables with the `TF_` prefix. Set them in 
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `TF_MODEL_NAME` | str | facebook/musicgen-large | Generation model (`facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b`) |
-| `TF_GENERATION_MAX_DURATION` | int | 30 | Max duration (seconds) |
-| `TF_GENERATION_SAMPLE_RATE` | int | 32000 | Sample rate (Hz) |
+| `TF_MODEL_NAME` | str | ace-step-1.5 | Generation model (`ace-step-1.5`, `facebook/musicgen-large`, `diffrhythm-full`, `heartmula`, `heartmula-7b`) |
+| `TF_GENERATION_MAX_DURATION` | int | 180 | Max duration (seconds) |
+| `TF_GENERATION_SAMPLE_RATE` | int | 48000 | Sample rate (Hz) |
 | `TF_GENERATION_TIMEOUT` | int | 120 | Generation timeout (seconds) |
 | `TF_GPU_DEVICE` | str | cuda:0 | GPU device |
 | `TF_MODEL_PRECISION` | str | float16 | Precision (float32/float16/bfloat16) |
@@ -288,7 +290,8 @@ tuneforge/
 │   │   └── validator.py            -- TuneForgeValidator implementation
 │   ├── generation/
 │   │   ├── model_manager.py        -- Backend manager (lazy load, GPU monitor)
-│   │   ├── musicgen_backend.py     -- MusicGen backend (default)
+│   │   ├── ace_step_backend.py     -- ACE-Step 1.5 backend (default)
+│   │   ├── musicgen_backend.py     -- MusicGen backend
 │   │   ├── diffrhythm_backend.py   -- DiffRhythm v1.2 backend
 │   │   ├── heartmula_backend.py   -- HeartMuLa backend (vocals + prompt adherence)
 │   │   ├── lyrics_generator.py    -- GPT-2 lyrics generation + genre/mood extraction
