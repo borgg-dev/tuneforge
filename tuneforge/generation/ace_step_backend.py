@@ -72,25 +72,36 @@ class AceStepBackend:
             "ACESTEP_CONFIG", "acestep-v15-sft"
         )
         self._handler: Any = None
+        self._llm_handler: Any = None
         self._loaded = False
+
+        # LM model for Chain-of-Thought song planning (structure, lyrics, metadata)
+        self._lm_model = os.environ.get("ACESTEP_LM_MODEL", "acestep-5Hz-lm-1.7B")
 
         logger.info(
             f"AceStepBackend initialized: device={self.device}, "
-            f"variant={self._config_path}, ckpt={self._ckpt_path}"
+            f"variant={self._config_path}, lm={self._lm_model}, ckpt={self._ckpt_path}"
         )
 
     def load(self) -> None:
-        """Load ACE-Step model into memory."""
+        """Load ACE-Step DiT + LLM models into memory.
+
+        The LLM (1.7B) plans song structure via Chain-of-Thought reasoning:
+        generates lyrics, fills metadata (BPM, key), and plans verse/chorus/bridge.
+        Without it, the DiT produces incoherent random audio.
+        """
         if self._loaded:
             return
 
-        logger.info("Loading ACE-Step 1.5 model...")
+        logger.info("Loading ACE-Step 1.5 model (DiT + LLM)...")
         t0 = time.time()
 
         try:
             _ensure_acestep_importable(self._repo_path)
             from acestep.handler import AceStepHandler
+            from acestep.llm_inference import LLMHandler
 
+            # 1. Load DiT model (diffusion transformer)
             self._handler = AceStepHandler()
             status, ok = self._handler.initialize_service(
                 project_root=self._ckpt_path,
@@ -98,7 +109,26 @@ class AceStepBackend:
                 device=self.device,
             )
             if not ok:
-                raise RuntimeError(f"ACE-Step init failed: {status}")
+                raise RuntimeError(f"ACE-Step DiT init failed: {status}")
+            logger.info(f"ACE-Step DiT loaded ({self._config_path})")
+
+            # 2. Load LLM for Chain-of-Thought song planning
+            checkpoint_dir = os.path.join(self._ckpt_path, "checkpoints")
+            self._llm_handler = LLMHandler()
+            lm_status, lm_ok = self._llm_handler.initialize(
+                checkpoint_dir=checkpoint_dir,
+                lm_model_path=self._lm_model,
+                backend="pt",  # Use PyTorch backend (no vLLM dependency)
+                device=self.device,
+            )
+            if not lm_ok:
+                logger.warning(
+                    f"ACE-Step LLM init failed ({lm_status}) — "
+                    "generation will work but without song structure planning"
+                )
+                self._llm_handler = None
+            else:
+                logger.info(f"ACE-Step LLM loaded ({self._lm_model})")
 
             self._loaded = True
             elapsed = time.time() - t0
@@ -108,9 +138,14 @@ class AceStepBackend:
             raise RuntimeError(f"ACE-Step model load failed: {exc}") from exc
 
     def unload(self) -> None:
-        """Unload model from memory and free GPU resources."""
+        """Unload DiT + LLM models from memory and free GPU resources."""
+        if self._llm_handler is not None:
+            try:
+                self._llm_handler.unload()
+            except Exception:
+                pass
+            self._llm_handler = None
         if self._handler is not None:
-            # Clear model references
             for attr in ("model", "vae", "text_encoder"):
                 obj = getattr(self._handler, attr, None)
                 if obj is not None:
@@ -175,6 +210,10 @@ class AceStepBackend:
             steps = 8 if is_turbo else 50
             cfg = 0.0 if is_turbo else guidance_scale
 
+            # Enable Chain-of-Thought when LLM is loaded — this makes the
+            # LLM plan the song structure (verse/chorus/bridge), generate
+            # lyrics if needed, and fill missing metadata (BPM, key, etc).
+            has_llm = self._llm_handler is not None
             params = GenerationParams(
                 caption=prompt,
                 lyrics=lyrics,
@@ -182,11 +221,14 @@ class AceStepBackend:
                 seed=seed if seed is not None else -1,
                 inference_steps=steps,
                 guidance_scale=cfg,
+                thinking=has_llm,
+                use_cot_caption=has_llm,
+                use_cot_metas=has_llm,
             )
             config = GenerationConfig(batch_size=1)
             result = generate_music(
-                self._handler, None, params, config,
-                save_dir=None,  # Don't save to disk, just return tensors
+                self._handler, self._llm_handler, params, config,
+                save_dir=None,
             )
 
             if not result.success:
