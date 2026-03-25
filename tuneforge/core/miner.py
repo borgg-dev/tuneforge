@@ -251,12 +251,11 @@ class TuneForgeMiner(BaseMinerNeuron):
         # adherence and vocal quality scores.
         lyrics = None
         vocals_requested = synapse.vocals_requested
-        if self._model_manager.supports_vocals and vocals_requested and self._lyrics_gen:
-            from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
-
+        if self._model_manager.supports_vocals and vocals_requested:
             lyrics = synapse.lyrics
-            if not lyrics:
-                # Vocals explicitly requested but no lyrics provided — generate
+            if not lyrics and self._lyrics_gen:
+                # Vocals requested, no lyrics, external generator available
+                from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
                 logger.info("Generating lyrics from prompt (vocals explicitly requested)")
                 genre = extract_genre(prompt) or synapse.genre
                 mood = extract_mood(prompt) or synapse.mood
@@ -267,6 +266,12 @@ class TuneForgeMiner(BaseMinerNeuron):
                     duration_seconds=duration,
                 )
                 logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
+            elif not lyrics:
+                # Vocals requested, no lyrics, no external generator (ACE-Step).
+                # Pass empty string so the backend knows vocals are wanted
+                # and can use its own LLM to generate lyrics.
+                lyrics = ""
+                logger.info("Vocals requested — backend LLM will generate lyrics")
         elif not vocals_requested:
             logger.debug("Vocals not requested — generating instrumental")
 
