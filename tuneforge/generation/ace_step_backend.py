@@ -63,16 +63,20 @@ class AceStepBackend:
         device: str = "cuda",
         repo_path: str | None = None,
         ckpt_path: str | None = None,
+        config_path: str | None = None,
     ) -> None:
         self.device = device
         self._repo_path = repo_path or _DEFAULT_ACESTEP_PATH
         self._ckpt_path = ckpt_path or _DEFAULT_ACESTEP_CKPT_PATH
+        self._config_path = config_path or os.environ.get(
+            "ACESTEP_CONFIG", "acestep-v15-sft"
+        )
         self._handler: Any = None
         self._loaded = False
 
         logger.info(
             f"AceStepBackend initialized: device={self.device}, "
-            f"repo={self._repo_path}, ckpt={self._ckpt_path}"
+            f"variant={self._config_path}, ckpt={self._ckpt_path}"
         )
 
     def load(self) -> None:
@@ -90,7 +94,7 @@ class AceStepBackend:
             self._handler = AceStepHandler()
             status, ok = self._handler.initialize_service(
                 project_root=self._ckpt_path,
-                config_path="acestep-v15-turbo",
+                config_path=self._config_path,
                 device=self.device,
             )
             if not ok:
@@ -165,11 +169,19 @@ class AceStepBackend:
         t0 = time.time()
 
         try:
+            # Determine inference steps and CFG based on model variant.
+            # Turbo: 8 steps, no CFG. SFT/Base: 50 steps, CFG enabled.
+            is_turbo = "turbo" in self._config_path
+            steps = 8 if is_turbo else 50
+            cfg = 0.0 if is_turbo else guidance_scale
+
             params = GenerationParams(
                 caption=prompt,
                 lyrics=lyrics,
                 duration=duration_seconds,
                 seed=seed if seed is not None else -1,
+                inference_steps=steps,
+                guidance_scale=cfg,
             )
             config = GenerationConfig(batch_size=1)
             result = generate_music(
