@@ -236,22 +236,20 @@ class TuneForgeMiner(BaseMinerNeuron):
             float(self.settings.generation_max_duration),
         )
 
-        # Handle lyrics/vocals — only for backends that support them
+        # Handle lyrics/vocals — only for backends that support them.
+        # IMPORTANT: Only generate vocals when EXPLICITLY requested by the
+        # caller. Never auto-detect vocal intent — GPT-2 is unreliable as a
+        # classifier and generates incoherent lyrics that hurt prompt
+        # adherence and vocal quality scores.
         lyrics = None
         vocals_requested = synapse.vocals_requested
-        if self._model_manager.supports_vocals and self._lyrics_gen:
+        if self._model_manager.supports_vocals and vocals_requested and self._lyrics_gen:
             from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
 
-            # If vocals not explicitly requested, use GPT-2 to analyze the prompt
-            if not vocals_requested:
-                vocals_requested = self._lyrics_gen.detect_vocal_intent(prompt)
-                if vocals_requested:
-                    logger.info("GPT-2 detected vocal intent from prompt")
-
             lyrics = synapse.lyrics
-            if not lyrics and vocals_requested:
-                # Vocals requested (explicitly or detected) but no lyrics — generate
-                logger.info("Generating lyrics from prompt")
+            if not lyrics:
+                # Vocals explicitly requested but no lyrics provided — generate
+                logger.info("Generating lyrics from prompt (vocals explicitly requested)")
                 genre = extract_genre(prompt) or synapse.genre
                 mood = extract_mood(prompt) or synapse.mood
                 lyrics = self._lyrics_gen.generate(
@@ -261,6 +259,8 @@ class TuneForgeMiner(BaseMinerNeuron):
                     duration_seconds=duration,
                 )
                 logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
+        elif not vocals_requested:
+            logger.debug("Vocals not requested — generating instrumental")
 
         audio, sr = self._model_manager.generate(
             prompt=prompt,
