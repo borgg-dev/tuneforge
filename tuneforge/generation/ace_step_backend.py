@@ -194,17 +194,18 @@ class AceStepBackend:
         # Cap duration to model limits (ACE-Step supports up to ~5 min)
         duration_seconds = min(max(duration_seconds, 5), 300)
 
-        # None = no preference (default to instrumental).
-        # Empty string = vocals requested, let LLM generate lyrics.
-        # "[Instrumental]" = explicitly instrumental.
+        # Determine vocal mode:
+        # - lyrics=None → instrumental (no vocals requested)
+        # - lyrics="" → vocals requested, no lyrics provided (LLM generates)
+        # - lyrics="[Instrumental]" → explicitly instrumental
+        # - lyrics="actual text" → sing these lyrics
+        wants_vocals = lyrics is not None and lyrics != "[Instrumental]"
         if lyrics is None:
             lyrics = "[Instrumental]"
-        # Empty string means vocals wanted but no lyrics provided —
-        # the LLM will generate lyrics via Chain-of-Thought.
 
         logger.info(
             f"Generating: prompt='{prompt[:80]}...', "
-            f"duration={duration_seconds}s, seed={seed}"
+            f"duration={duration_seconds}s, vocals={wants_vocals}, seed={seed}"
         )
         t0 = time.time()
 
@@ -226,9 +227,12 @@ class AceStepBackend:
                 seed=seed if seed is not None else -1,
                 inference_steps=steps,
                 guidance_scale=cfg,
+                instrumental=not wants_vocals,
+                vocal_language="en" if wants_vocals else "instrumental",
                 thinking=has_llm,
                 use_cot_caption=has_llm,
                 use_cot_metas=has_llm,
+                use_cot_language=has_llm and wants_vocals,
             )
             config = GenerationConfig(batch_size=1)
             result = generate_music(
