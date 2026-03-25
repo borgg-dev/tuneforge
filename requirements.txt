@@ -6,6 +6,7 @@ numpy>=2.0.1
 scipy>=1.11.0
 transformers>=4.51.0,<4.58.0
 diffusers>=0.30.0
+omegaconf>=2.3.0
 torchsde>=0.2.5
 huggingface-hub>=0.20.0
 # audiocraft installed separately with --no-deps (hard-pins torch==2.1.0)
