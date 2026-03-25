@@ -206,9 +206,7 @@ class AceStepBackend:
 
         logger.info(
             f"Generating: prompt='{prompt[:80]}...', "
-            f"duration={duration_seconds}s, vocals={wants_vocals}, seed={seed}, "
-            f"lyrics_len={len(lyrics) if lyrics else 0}, "
-            f"lyrics_preview='{lyrics[:80] if lyrics and lyrics != '[Instrumental]' else lyrics}'"
+            f"duration={duration_seconds}s, vocals={wants_vocals}, seed={seed}"
         )
         t0 = time.time()
 
