@@ -206,7 +206,9 @@ class AceStepBackend:
 
         logger.info(
             f"Generating: prompt='{prompt[:80]}...', "
-            f"duration={duration_seconds}s, vocals={wants_vocals}, seed={seed}"
+            f"duration={duration_seconds}s, vocals={wants_vocals}, seed={seed}, "
+            f"lyrics_len={len(lyrics) if lyrics else 0}, "
+            f"lyrics_preview='{lyrics[:80] if lyrics and lyrics != '[Instrumental]' else lyrics}'"
         )
         t0 = time.time()
 
@@ -217,14 +219,18 @@ class AceStepBackend:
             steps = 8 if is_turbo else 50
             cfg = 0.0 if is_turbo else guidance_scale
 
-            # Enable Chain-of-Thought when LLM is loaded — this makes the
-            # LLM plan the song structure (verse/chorus/bridge), generate
-            # lyrics if needed, and fill missing metadata (BPM, key, etc).
             has_llm = self._llm_handler is not None
 
+            # When vocals are requested with lyrics, disable LLM "thinking"
+            # mode. In thinking mode, the LLM generates audio codes that
+            # REPLACE the lyrics in the DiT conditioning — the lyrics text
+            # gets cleared. Without thinking, the DiT conditions directly
+            # on the lyrics text, producing actual sung vocals.
+            # For instrumental, thinking mode is beneficial for structure.
+            use_thinking = has_llm and not wants_vocals
+
             # Pass BPM and key explicitly so ACE-Step generates at the
-            # correct tempo/key — the attribute verifier (11% weight)
-            # checks these against the synapse parameters.
+            # correct tempo/key (attribute verifier checks these).
             tempo_bpm = kwargs.get("tempo_bpm")
             key_signature = kwargs.get("key_signature")
 
@@ -237,7 +243,7 @@ class AceStepBackend:
                 guidance_scale=cfg,
                 instrumental=not wants_vocals,
                 vocal_language="en" if wants_vocals else "instrumental",
-                thinking=has_llm,
+                thinking=use_thinking,
                 use_cot_caption=has_llm,
                 use_cot_metas=has_llm,
                 use_cot_language=has_llm and wants_vocals,
