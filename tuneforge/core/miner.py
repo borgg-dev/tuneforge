@@ -134,16 +134,22 @@ class TuneForgeMiner(BaseMinerNeuron):
         t0 = time.time()
 
         try:
-            # For challenges, structured params lead (validator controls the test)
-            enhanced_prompt = self._prompt_parser.build_prompt(
-                text=synapse.prompt,
-                genre=synapse.genre,
-                mood=synapse.mood,
-                tempo=synapse.tempo_bpm,
-                instruments=synapse.instruments,
-                key=synapse.key_signature,
-                time_sig=synapse.time_signature,
-            )
+            # For ACE-Step: use the original prompt directly — it already
+            # contains the full description and ACE-Step's LLM handles
+            # structure planning. PromptParser would double the information.
+            # For MusicGen/others: enhance with structured params.
+            if self._model_manager.active_backend == "ace_step":
+                enhanced_prompt = synapse.prompt
+            else:
+                enhanced_prompt = self._prompt_parser.build_prompt(
+                    text=synapse.prompt,
+                    genre=synapse.genre,
+                    mood=synapse.mood,
+                    tempo=synapse.tempo_bpm,
+                    instruments=synapse.instruments,
+                    key=synapse.key_signature,
+                    time_sig=synapse.time_signature,
+                )
             logger.info(
                 f"[CHALLENGE] {synapse.challenge_id}: "
                 f"prompt='{enhanced_prompt[:100]}', "
@@ -190,16 +196,19 @@ class TuneForgeMiner(BaseMinerNeuron):
         t0 = time.time()
 
         try:
-            # For organic: user's prompt leads, structured params supplement
-            enhanced_prompt = self._prompt_parser.build_prompt(
-                text=synapse.prompt,
-                genre=synapse.genre,
-                mood=synapse.mood,
-                tempo=synapse.tempo_bpm,
-                instruments=synapse.instruments,
-                key=synapse.key_signature,
-                time_sig=synapse.time_signature,
-            )
+            # For ACE-Step: use prompt directly. For others: enhance.
+            if self._model_manager.active_backend == "ace_step":
+                enhanced_prompt = synapse.prompt
+            else:
+                enhanced_prompt = self._prompt_parser.build_prompt(
+                    text=synapse.prompt,
+                    genre=synapse.genre,
+                    mood=synapse.mood,
+                    tempo=synapse.tempo_bpm,
+                    instruments=synapse.instruments,
+                    key=synapse.key_signature,
+                    time_sig=synapse.time_signature,
+                )
             logger.info(
                 f"[ORGANIC] {synapse.challenge_id}: "
                 f"prompt='{enhanced_prompt[:100]}', "
