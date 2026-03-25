@@ -86,14 +86,19 @@ class TuneForgeMiner(BaseMinerNeuron):
         logger.info(f"Preloading {backend} model...")
         self._model_manager.preload()
 
-        # Preload lyrics generator only if backend supports vocals
-        if self._model_manager.supports_vocals:
+        # Preload lyrics generator only for backends that support vocals
+        # but don't have their own lyric generation (ACE-Step has its own LM).
+        needs_external_lyrics = (
+            self._model_manager.supports_vocals
+            and backend not in ("ace_step",)
+        )
+        if needs_external_lyrics:
             from tuneforge.generation.lyrics_generator import LyricsGenerator
-            self._lyrics_gen = LyricsGenerator(device="cpu")  # GPT-2 runs fine on CPU, saves GPU VRAM
+            self._lyrics_gen = LyricsGenerator(device="cpu")
             logger.info("Preloading lyrics generator (backend supports vocals)...")
             self._lyrics_gen.load()
         else:
-            logger.info("Skipping lyrics generator (backend does not support vocals)")
+            logger.info(f"Skipping lyrics generator (backend={backend})")
 
         logger.info(
             f"TuneForgeMiner initialized: backend={backend}, "

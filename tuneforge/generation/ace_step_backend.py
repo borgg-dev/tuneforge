@@ -55,6 +55,7 @@ class AceStepBackend:
     """
 
     SAMPLE_RATE: int = 48000
+    SUPPORTS_VOCALS: bool = True
     model_id: str = "ACE-Step-1.5"
 
     def __init__(
