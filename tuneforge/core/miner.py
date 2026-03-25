@@ -47,7 +47,10 @@ class TuneForgeMiner(BaseMinerNeuron):
 
         # Parse model backend from model_name
         model_name = self.settings.model_name
-        if "heartmula" in model_name.lower() or "heart-mula" in model_name.lower() or "heart_mula" in model_name.lower():
+        if "ace-step" in model_name.lower() or "ace_step" in model_name.lower() or "acestep" in model_name.lower():
+            model_size = "medium"
+            backend = "ace_step"
+        elif "heartmula" in model_name.lower() or "heart-mula" in model_name.lower() or "heart_mula" in model_name.lower():
             model_size = "7B" if "7b" in model_name.lower() else "3B"
             backend = "heartmula"
         elif "diffrhythm" in model_name.lower() or "diff-rhythm" in model_name.lower() or "diff_rhythm" in model_name.lower():
@@ -60,7 +63,7 @@ class TuneForgeMiner(BaseMinerNeuron):
             backend = "musicgen"
         else:
             model_size = "medium"
-            backend = "musicgen"  # Default to MusicGen
+            backend = "ace_step"  # Default to ACE-Step
 
         self._model_manager = ModelManager(
             default_backend=backend,
