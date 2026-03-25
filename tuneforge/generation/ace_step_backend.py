@@ -221,6 +221,13 @@ class AceStepBackend:
             # LLM plan the song structure (verse/chorus/bridge), generate
             # lyrics if needed, and fill missing metadata (BPM, key, etc).
             has_llm = self._llm_handler is not None
+
+            # Pass BPM and key explicitly so ACE-Step generates at the
+            # correct tempo/key — the attribute verifier (11% weight)
+            # checks these against the synapse parameters.
+            tempo_bpm = kwargs.get("tempo_bpm")
+            key_signature = kwargs.get("key_signature")
+
             params = GenerationParams(
                 caption=prompt,
                 lyrics=lyrics,
@@ -234,6 +241,8 @@ class AceStepBackend:
                 use_cot_caption=has_llm,
                 use_cot_metas=has_llm,
                 use_cot_language=has_llm and wants_vocals,
+                **({"bpm": tempo_bpm} if tempo_bpm is not None else {}),
+                **({"keyscale": key_signature} if key_signature is not None else {}),
             )
             config = GenerationConfig(batch_size=1)
             result = generate_music(

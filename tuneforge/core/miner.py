@@ -260,18 +260,31 @@ class TuneForgeMiner(BaseMinerNeuron):
         if self._model_manager.supports_vocals and vocals_requested:
             lyrics = synapse.lyrics
             if not lyrics and self._lyrics_gen:
-                # Vocals requested, no lyrics provided — generate with GPT-2
-                from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
-                logger.info("Generating lyrics from prompt (vocals explicitly requested)")
-                genre = extract_genre(prompt) or synapse.genre
-                mood = extract_mood(prompt) or synapse.mood
-                lyrics = self._lyrics_gen.generate(
-                    prompt=prompt,
-                    genre=genre,
-                    mood=mood,
-                    duration_seconds=duration,
-                )
-                logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
+                # Vocals requested but no lyrics provided.
+                # ACE-Step: skip GPT-2 lyrics — its auto-generated vocals are
+                # bad enough to score 0.0 on vocal scorers (12% of weight).
+                # Generating instrumental instead yields neutral 0.5, which is
+                # strictly better than 0.0.
+                # Other backends (HeartMuLa, DiffRhythm): generate with GPT-2.
+                if self._model_manager.active_backend == "ace_step":
+                    logger.info(
+                        "ACE-Step: no user lyrics provided — falling back to "
+                        "instrumental (neutral 0.5 > bad vocals 0.0)"
+                    )
+                    lyrics = None
+                    vocals_requested = False
+                else:
+                    from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
+                    logger.info("Generating lyrics from prompt (vocals explicitly requested)")
+                    genre = extract_genre(prompt) or synapse.genre
+                    mood = extract_mood(prompt) or synapse.mood
+                    lyrics = self._lyrics_gen.generate(
+                        prompt=prompt,
+                        genre=genre,
+                        mood=mood,
+                        duration_seconds=duration,
+                    )
+                    logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
         elif not vocals_requested:
             logger.debug("Vocals not requested — generating instrumental")
 
