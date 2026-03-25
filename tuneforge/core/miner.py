@@ -86,19 +86,16 @@ class TuneForgeMiner(BaseMinerNeuron):
         logger.info(f"Preloading {backend} model...")
         self._model_manager.preload()
 
-        # Preload lyrics generator only for backends that support vocals
-        # but don't have their own lyric generation (ACE-Step has its own LM).
-        needs_external_lyrics = (
-            self._model_manager.supports_vocals
-            and backend not in ("ace_step",)
-        )
-        if needs_external_lyrics:
+        # Preload lyrics generator for any backend that supports vocals.
+        # Even ACE-Step needs external lyrics — its LLM CoT generates metadata
+        # and audio codes but NOT lyrics text.
+        if self._model_manager.supports_vocals:
             from tuneforge.generation.lyrics_generator import LyricsGenerator
             self._lyrics_gen = LyricsGenerator(device="cpu")
-            logger.info("Preloading lyrics generator (backend supports vocals)...")
+            logger.info("Preloading lyrics generator...")
             self._lyrics_gen.load()
         else:
-            logger.info(f"Skipping lyrics generator (backend={backend})")
+            logger.info("Skipping lyrics generator (backend does not support vocals)")
 
         logger.info(
             f"TuneForgeMiner initialized: backend={backend}, "
@@ -254,7 +251,7 @@ class TuneForgeMiner(BaseMinerNeuron):
         if self._model_manager.supports_vocals and vocals_requested:
             lyrics = synapse.lyrics
             if not lyrics and self._lyrics_gen:
-                # Vocals requested, no lyrics, external generator available
+                # Vocals requested, no lyrics provided — generate with GPT-2
                 from tuneforge.generation.lyrics_generator import extract_genre, extract_mood
                 logger.info("Generating lyrics from prompt (vocals explicitly requested)")
                 genre = extract_genre(prompt) or synapse.genre
@@ -266,12 +263,6 @@ class TuneForgeMiner(BaseMinerNeuron):
                     duration_seconds=duration,
                 )
                 logger.info(f"Generated {len(lyrics.splitlines())} lines of lyrics")
-            elif not lyrics:
-                # Vocals requested, no lyrics, no external generator (ACE-Step).
-                # Pass empty string so the backend knows vocals are wanted
-                # and can use its own LLM to generate lyrics.
-                lyrics = ""
-                logger.info("Vocals requested — backend LLM will generate lyrics")
         elif not vocals_requested:
             logger.debug("Vocals not requested — generating instrumental")
 

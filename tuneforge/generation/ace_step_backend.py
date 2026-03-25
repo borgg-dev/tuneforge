@@ -203,12 +203,6 @@ class AceStepBackend:
         wants_vocals = lyrics is not None and lyrics != "[Instrumental]"
         if lyrics is None:
             lyrics = "[Instrumental]"
-        elif lyrics == "":
-            # Vocals requested but no lyrics provided. Give ACE-Step a
-            # minimal section structure so it knows to generate vocal content.
-            # The LLM + DiT will fill in actual words based on the caption.
-            lyrics = "[Verse]\n\n[Chorus]\n\n[Verse]\n\n[Chorus]"
-            logger.info("No lyrics provided — using section scaffolding for vocal generation")
 
         logger.info(
             f"Generating: prompt='{prompt[:80]}...', "
