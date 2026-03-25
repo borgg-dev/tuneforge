@@ -16,7 +16,7 @@
   Validators issue challenges, score the returned audio across 16 quality signals with penalty<br/>
   multipliers, and set on-chain weights that determine α emissions. The scoring pipeline is<br/>
   model-agnostic — it evaluates the audio, not the architecture. The recommended default backend<br/>
-  is ACE-Step 1.5 (48kHz stereo, vocals+lyrics, under 4GB VRAM, MIT license). MusicGen Large,<br/>
+  is ACE-Step 1.5 (48kHz stereo, vocals+lyrics, ~10GB VRAM with LLM planner, MIT license). MusicGen Large,<br/>
   DiffRhythm v1.2, and HeartMuLa remain available as alternatives, but the ones earning real<br/>
   weight will be the ones who bring better models, fine-tune aggressively, or build something<br/>
   entirely new.</p>

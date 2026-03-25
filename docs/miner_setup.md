@@ -2,7 +2,7 @@
 
 This guide covers everything you need to run a miner on the TuneForge subnet. A miner receives music generation challenges from validators, produces audio, and earns α (alpha) rewards based on quality scores.
 
-**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** ACE-Step 1.5 is the recommended default backend -- it produces 48kHz stereo audio with vocals and lyrics support, requires under 4GB VRAM (turbo variant), and is MIT licensed. MusicGen Large, DiffRhythm, and HeartMuLa remain available as alternatives. Miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
+**The subnet's purpose is to incentivize competition and model improvement through Bittensor.** ACE-Step 1.5 SFT is the recommended default backend -- it produces 48kHz stereo audio with vocals and lyrics support, uses a 1.7B LLM for Chain-of-Thought song planning (verse/chorus/bridge structure, lyrics, metadata), requires ~10GB VRAM, and is MIT licensed. MusicGen Large, DiffRhythm, and HeartMuLa remain available as alternatives. Miners are strongly encouraged to bring their own models, fine-tune existing ones, or build entirely new generation pipelines. Any model that generates music from text prompts can be integrated. The scoring system rewards quality, not any specific model.
 
 ---
 
@@ -24,7 +24,7 @@ A TuneForge miner performs the following:
 
 | Setup | GPU | VRAM | CPU | RAM | Disk | Best For |
 |-------|-----|------|-----|-----|------|----------|
-| **Recommended (ACE-Step 1.5)** | RTX 3060 / T4 or better | 4 GB | 4 cores | 16 GB | 50 GB SSD | Default recommended backend, 48kHz stereo, vocals+lyrics, sub-10s generation |
+| **Recommended (ACE-Step 1.5)** | RTX 3060 / T4 or better | 10 GB | 4 cores | 16 GB | 50 GB SSD | Default recommended backend, 48kHz stereo, vocals+lyrics, ~7s generation |
 | **Competitive (MusicGen Large)** | RTX 4090 / A100 | 24 GB | 8 cores | 32 GB | 50 GB SSD | MusicGen family, instrumental only, CC-BY-NC license |
 | **Mid-range (MusicGen Medium)** | RTX 3090 / A10 | 16 GB | 4 cores | 16 GB | 50 GB SSD | Good balance of quality and cost |
 | **Budget (DiffRhythm)** | RTX 3060 / T4 | 8 GB | 4 cores | 16 GB | 50 GB SSD | Lower VRAM models, still competitive on quality |
@@ -36,7 +36,7 @@ A TuneForge miner performs the following:
 
 | Model | `TF_MODEL_NAME` | VRAM (fp16) | Speed (30s audio) | Sample Rate | Notes |
 |-------|-----------------|-------------|--------------------| ------------|-------|
-| **ACE-Step 1.5** (recommended) | `ace-step-1.5` | ~4 GB | sub-10s on 4090 | 48 kHz stereo | Recommended default. Vocals+lyrics, 50+ languages, up to 10 min, MIT license |
+| **ACE-Step 1.5 SFT** (recommended) | `ace-step-1.5` | ~10 GB | ~7s on 4090 | 48 kHz stereo | Recommended default. DiT + 1.7B LLM planner, vocals+lyrics, 50+ languages, up to 10 min, MIT license |
 | MusicGen Large | `facebook/musicgen-large` | ~16 GB | ~20-40s on 4090 | 32 kHz mono | 3.3B params, instrumental only, no vocals. CC-BY-NC license (non-commercial) |
 | DiffRhythm v1.2 (full) | `diffrhythm-full` | ~8-10 GB | ~5-10s on 4090 | 44.1 kHz stereo | Full-length songs up to 4m45s, vocal+lyrics support. Fast generation, decent quality |
 | HeartMuLa 3B | `heartmula` | ~8-10 GB | ~10-30s on 4090 | 48 kHz | Vocals+lyrics. Open-source 3B has weak prompt adherence, mainly useful for vocal generation |
@@ -99,7 +99,7 @@ pip install -e .
 
 ### ACE-Step 1.5 Setup (Recommended Default)
 
-ACE-Step 1.5 is the recommended default backend. It produces 48kHz stereo audio with vocals and lyrics support in 50+ languages, generates up to 10 minutes of audio, requires under 4GB VRAM (turbo variant), and runs with sub-10s generation times. Quality is between Suno v4.5 and v5. It is MIT licensed (fully commercial).
+ACE-Step 1.5 SFT is the recommended default backend. It uses a 1.7B LLM for Chain-of-Thought song planning (structure, lyrics, metadata) combined with a diffusion transformer for audio synthesis. It produces 48kHz stereo audio with vocals and lyrics support in 50+ languages, generates up to 10 minutes of audio, requires ~10GB VRAM (DiT 6GB + LLM 4GB), and runs with ~7s generation times on an RTX 4090. Quality is between Suno v4.5 and v5. It is MIT licensed (fully commercial).
 
 ```bash
 # Clone the ACE-Step repo
@@ -296,7 +296,7 @@ The provided models are baselines to get you started. The real opportunity on Tu
 
 | Model | `TF_MODEL_NAME` | VRAM | Speed | Sample Rate | Notes |
 |-------|-----------------|------|-------|-------------|-------|
-| **ACE-Step 1.5** | `ace-step-1.5` | ~4 GB | Sub-10s | 48 kHz stereo | **Recommended default.** Vocals+lyrics, 50+ languages, up to 10 min, MIT license. Requires repo clone |
+| **ACE-Step 1.5 SFT** | `ace-step-1.5` | ~10 GB | ~7s | 48 kHz stereo | **Recommended default.** DiT + 1.7B LLM planner, vocals+lyrics, 50+ languages, up to 10 min, MIT license. Requires repo clone |
 | MusicGen Large | `facebook/musicgen-large` | ~16 GB | Moderate | 32 kHz mono | Instrumental only, no vocals, 30s max. CC-BY-NC license (non-commercial) |
 | MusicGen Medium | `facebook/musicgen-medium` | ~8 GB | Faster | 32 kHz mono | Good for GPUs with <16GB VRAM. CC-BY-NC license |
 | MusicGen Small | `facebook/musicgen-small` | ~4 GB | Fastest | 32 kHz mono | Good for testing or low-VRAM GPUs. CC-BY-NC license |
@@ -319,7 +319,7 @@ Speed accounts for only 2% of the total score. Quality and adherence signals col
 Set the model in your `.env.miner` file:
 
 ```bash
-# ACE-Step 1.5 (recommended default, ~4GB VRAM, 48kHz stereo, vocals+lyrics)
+# ACE-Step 1.5 SFT (recommended default, ~10GB VRAM, 48kHz stereo, vocals+lyrics)
 TF_MODEL_NAME=ace-step-1.5
 TF_GENERATION_SAMPLE_RATE=48000
 TF_GENERATION_MAX_DURATION=180
@@ -512,7 +512,7 @@ The miner exposes health information via `HealthReportSynapse`, which includes G
 
 ### CUDA Out of Memory
 
-MusicGen Large requires ~16 GB VRAM. If you run out of memory, try ACE-Step 1.5 (~4GB, recommended), DiffRhythm (~8-10GB), or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
+MusicGen Large requires ~16 GB VRAM. If you run out of memory, try ACE-Step 1.5 (~10GB, recommended), DiffRhythm (~8-10GB), or MusicGen Medium (~8GB). For very low-VRAM GPUs, fall back to MusicGen Small:
 
 ```bash
 TF_MODEL_NAME=facebook/musicgen-small
